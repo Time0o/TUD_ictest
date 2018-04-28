@@ -120,7 +120,7 @@ def generate_testcase(testcase_no, state_vector):
 
     ASM = 'z80asm'
 
-    RUNSIM = 'ictest_runsim'
+    RUNSIM = 'ictest_runsim.exp'
 
     # testcase identifier
     testcase_uuid = str(uuid.uuid4())[:8]
