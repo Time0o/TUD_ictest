@@ -305,6 +305,9 @@ if __name__ == '__main__':
 
             testcase_out.writelines(testcase)
             progmem_out.writelines(progmem)
+
+        testcase_out.write('unit.finish("{0} ({1})");\n'.format(name, desc))
+
     finally:
         testcase_out.close()
         progmem_out.close()
