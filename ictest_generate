@@ -74,7 +74,7 @@ class StateVector:
             b if b != 'x' else random.randint(0, 1) for b in self.bitvector]
 
 
-def generate_testcase(testcase_no, state_vector):
+def generate_testcase(testcase_no, state_vector, runsim):
    #TODO: load alternate registers
     ASM_STATE_FMT = {
         'A'  : " LD A,{0:03X}H\n",
@@ -161,7 +161,6 @@ def generate_testcase(testcase_no, state_vector):
     # create reference simulation output
     asm_tmp = open('tmp.asm', 'w+')
     bin_tmp = open('tmp.bin', 'w+')
-    exp_tmp = open('tmp.exp', 'w+')
     devnull = open(os.devnull, 'w')
 
     try:
@@ -183,33 +182,8 @@ def generate_testcase(testcase_no, state_vector):
         bin_tmp.write(b''.join(instructions))
         bin_tmp.close()
 
-        # run simulator TODO: use data memory
-        runsim = [
-            '#!/usr/bin/expect -f\n',
-            '\n',
-            'set bin [lindex $argv 0];\n',
-            'set setflags [lindex $argv 1];\n',
-            '\n',
-            'spawn z80sim\n',
-            'expect ">>>"\n',
-            'send "x f\\r"\n',
-            'expect "F = {0}"\n'.format(init_flags),
-            'send "$setflags\\r"\n',
-            'expect ">>>"\n',
-            'send "r $bin\\r"\n',
-            'expect ">>>"\n',
-            'send "g\\r"\n',
-            'expect ">>>"\n',
-            'send "quit\\r"'
-        ]
-
-        exp_tmp.writelines(runsim)
-        exp_tmp.close()
-
-        os.chmod(exp_tmp.name, 500)
-
         z80sim = subprocess.Popen(
-            ['./' + exp_tmp.name, bin_tmp.name, init_flags],
+            [runsim, bin_tmp.name, init_flags],
             stdout=subprocess.PIPE)
 
         z80sim.wait()
@@ -217,12 +191,10 @@ def generate_testcase(testcase_no, state_vector):
     finally:
         asm_tmp.close()
         bin_tmp.close()
-        exp_tmp.close()
         devnull.close()
 
         os.remove(asm_tmp.name)
         os.remove(bin_tmp.name)
-        os.remove(exp_tmp.name)
 
     # parse simulation results
     simout = z80sim.stdout.read()
@@ -310,6 +282,30 @@ if __name__ == '__main__':
     progmem_out = open(PROGMEM_FILE, 'w')
     datamem_out = open(DATAMEM_FILE, 'w')
 
+    runsim = open('tmp.exp', 'w+')
+
+    runsim.writelines([
+        '#!/usr/bin/expect -f\n',
+        '\n',
+        'set bin [lindex $argv 0];\n',
+        'set setflags [lindex $argv 1];\n',
+        '\n',
+        'spawn z80sim\n',
+        'expect ">>>"\n',
+        'send "x f\\r"\n',
+        'expect "F = "\n',
+        'send "$setflags\\r"\n',
+        'expect ">>>"\n',
+        'send "r $bin\\r"\n',
+        'expect ">>>"\n',
+        'send "g\\r"\n',
+        'expect ">>>"\n',
+        'send "quit\\r"'
+    ])
+    runsim.close()
+
+    os.chmod(runsim.name, 500)
+
     try:
         # randomly fill data memory
         datamem = []
@@ -333,7 +329,8 @@ if __name__ == '__main__':
                     vect.bitvector[cycle_pos[i - 1]] = int(b)
 
             vect.randomize()
-            testcase, progmem = generate_testcase(testcase_no, vect)
+            testcase, progmem = generate_testcase(testcase_no, vect,
+                                                  './' + runsim.name)
 
             testcase_out.writelines(testcase)
             progmem_out.writelines(progmem)
@@ -344,3 +341,6 @@ if __name__ == '__main__':
         testcase_out.close()
         progmem_out.close()
         datamem_out.close()
+
+        runsim.close()
+        os.remove(runsim.name)
