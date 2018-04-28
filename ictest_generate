@@ -1,0 +1,311 @@
+#!/usr/bin/env python2
+
+import os
+import random
+import re
+import subprocess
+import uuid
+
+
+class StateVector:
+    STATE_WIDTHS = {
+        "INST1" : 8,
+        "INST2" : 8,
+        "INST3" : 8,
+        "INST4" : 8,
+        "A"     : 8,
+        "A'"    : 8,
+        "F"     : 8,
+        "F'"    : 8,
+        "BC"    : 16,
+        "B'C'"  : 16,
+        "DE"    : 16,
+        "D'E'"  : 16,
+        "HL"    : 16,
+        "H'L'"  : 16,
+        "IX"    : 16,
+        "IY"    : 16,
+        "SP"    : 16
+    }
+
+    def __init__(self, states, bitvector):
+        self.states = states
+        self.bitvector = bitvector
+
+    @classmethod
+    def parse(cls, fmt):
+        states = []
+        bitvector = []
+
+        #TODO: sort by state?
+        for word in fmt.split(','):
+            m = re.match('^(\w+):([0-9a-fA-FxX]+)(b|h)$', word.strip())
+            if not m:
+                err = "malformed state vector element: {0}".format(word)
+                raise ValueError(err)
+
+            state, value, base = m.groups()
+
+            width = len(value) if base == 'b' else (len(value) * 4)
+            if width != StateVector.STATE_WIDTHS[state]:
+                err = "state '{0}' has wrong bit width".format(state)
+                raise ValueError(err)
+
+            states.append(state)
+
+            if base == 'b':
+                bitvector += [int(digit, 2) if digit != 'x' else 'x'
+                              for digit in value]
+            else:
+                for digit in value:
+                    if digit == 'x':
+                        bitvector += ['x', 'x', 'x', 'x']
+                    else:
+                        nibble = '{0:04b}'.format(int(digit, 16))
+                        bitvector += [int(b) for b in nibble]
+
+        return cls(states, bitvector)
+
+    def copy(self):
+        return StateVector(list(self.states), list(self.bitvector))
+
+    def randomize(self):
+        self.bitvector = [
+            b if b != 'x' else random.randint(0, 1) for b in self.bitvector]
+
+
+def generate_testcase(testcase_no, state_vector):
+   #TODO: load alternate registers
+    ASM_STATE_FMT = {
+        'A'  : " LD A,{0:03X}H\n",
+        'BC' : " LD BC,{0:05X}H\n",
+        'DE' : " LD DE,{0:05X}H\n",
+        'HL' : " LD HL,{0:05X}H\n",
+        'IX' : " LD IX,{0:05X}H\n",
+        'IY' : " LD IY,{0:05X}H\n",
+        'SP' : " LD SP,{0:05X}H\n"
+    }
+
+    VUNIT_STATE_FMT = {
+        "A"    : "z80_i.cpu_i.datapath_i.reg_accu_i.q = 8'h{0:02X};\n",
+        "A'"   : "z80_i.cpu_i.datapath_i.reg_accu_p_i.q = 8'h{0:02X};\n",
+        "F"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q = 8'h{0:02X};\n",
+        "F'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q = 8'h{0:02X};\n",
+        "BC"   : "z80_i.cpu_i.datapath_i.regfile_i.bc = 16'h{0:04X};\n",
+        "B'C'" : "z80_i.cpu_i.datapath_i.regfile_i.bc_p = 16'h{0:04X};\n",
+        "DE"   : "z80_i.cpu_i.datapath_i.regfile_i.de = 16'h{0:04X};\n",
+        "D'E'" : "z80_i.cpu_i.datapath_i.regfile_i.de_p = 16'h{0:04X};\n",
+        "HL"   : "z80_i.cpu_i.datapath_i.regfile_i.hl = 16'h{0:04X};\n",
+        "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p = 16'h{0:04X};\n",
+        "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix = 16'h{0:04X};\n",
+        "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy = 16'h{0:04X};\n",
+        "SP"   : "z80_i.cpu_i.datapath_i.sp = 16'h{0:04X};\n"
+    }
+
+    VUNIT_EXPECT_FMT = {
+        "A"    : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_accu_i.q, \"A ({1})\");\n",
+        "A'"   : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_accu_p_i.q, \"A' ({1})\");\n",
+        "F"    : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_alu_flags_i.q, \"F ({1})\");\n",
+        "F'"   : "unit.assert_eq8( 8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q, \"F' ({1})\");\n",
+        "BC"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.bc, \"BC ({1})\");\n",
+        "B'C'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.bc_p, \"B'C' ({1})\");\n",
+        "DE"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.de, \"DE ({1})\");\n",
+        "D'E'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.de_p, \"D'E' ({1})\");\n",
+        "HL"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.hl, \"HL ({1})\");\n",
+        "H'L'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.hl_p, \"H'L' ({1})\");\n",
+        "IX"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.ix, \"IX ({1})\");\n",
+        "IY"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.iy, \"IY ({1})\");\n",
+        "SP"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.sp, \"SP ({1})\");\n"
+    }
+
+    ASM = 'z80asm'
+
+    RUNSIM = 'ictest_runsim'
+
+    # testcase identifier
+    testcase_uuid = str(uuid.uuid4())[:8]
+
+    # z80sim input
+    init_asm = ['START:\n']
+    init_flags = '0x00'
+    test_ops = []
+
+    # ncsim input
+    test_heading_fmt = "// BEGIN TESTCASE #{0} {1}\n"
+    test_heading = test_heading_fmt.format(testcase_no, testcase_uuid)
+
+    testcase = [test_heading]
+    progmem = [test_heading]
+
+    offs = 0
+    for state in state_vector.states:
+        width = StateVector.STATE_WIDTHS[state]
+        binstr = ''.join(map(str, state_vector.bitvector[offs:(offs + width)]))
+        binvalue = int(binstr, 2)
+
+        if state.startswith('INST'):
+            test_ops.append(chr(binvalue))
+            progmem.append('{0:02X}\n'.format(binvalue))
+        else:
+            testcase.append(VUNIT_STATE_FMT[state].format(binvalue))
+
+            if state == 'F':
+                init_flags = '{0:02X}'.format(binvalue)
+            elif state == "F'":
+                raise ValueError('TODO') #TODO
+            else:
+                init_asm.append(ASM_STATE_FMT[state].format(binvalue))
+
+        offs += width
+
+    init_asm.append(' HALT')
+
+    # assemble bytecode
+    asm_tmp = 'tmp.asm'
+    bin_tmp = 'tmp.bin'
+
+    with open(asm_tmp, 'w+') as tmp:
+        tmp.writelines(init_asm)
+        tmp.flush()
+
+        with open(os.devnull, 'w') as devnull:
+            z80asm = subprocess.Popen([ASM, tmp.name], stdout=devnull)
+            z80asm.wait()
+
+        # inject instruction bytes
+        with open(bin_tmp, 'rb+') as binary:
+            data = binary.read()
+            instructions = [data[i:i+1] for i in range(len(data))]
+
+            for op in test_ops:
+                instructions.insert(-1, op)
+
+            binary.seek(0)
+            binary.write(b''.join(instructions))
+
+    os.remove(asm_tmp)
+
+    # run simulator TODO: use data memory
+    z80sim = subprocess.Popen([RUNSIM, bin_tmp, init_flags],
+                              stdout=subprocess.PIPE)
+    z80sim.wait()
+
+    simout = z80sim.stdout.read()
+    regs, values = re.search(r'HALT.*\s+(.*)\s+(.*)\s+>>>', simout).groups()
+
+    os.remove(bin_tmp)
+
+    # parse simulation results
+    expected = {}
+    regs = [r.strip() for r in regs.split()]
+    values = [v.strip() for v in values.split()]
+
+    for r, v in zip(regs, values):
+        if r == 'SZHPNC':
+            expected['F'] = int('{0}0{1}0{2}'.format(v[:2], v[2], v[3:]), 2)
+        elif r == "A'F'":
+            expected["A'"] = int(v[:2], 16)
+            expected["F'"] = int(v[2:], 16)
+        elif r in state_vector.states:
+            expected[r] = int(v, 16)
+
+    # add timeout loop to testbench code
+    waitloop = [
+        "#(CLKPERIOD);",
+        "",
+        "loop_counter = 5'b0;",
+        "while (z80_i.cpu_i.controller_i.fsm_i.state != FSM_STATE_INSTR_FETCH1_1)",
+        "begin",
+        "    #(CLKPERIOD);",
+        "    loop_counter = loop_counter + 1;",
+        "    if (loop_counter == 5'b11111)",
+        "        unit.fail(\"Instruction not terminating\");",
+        "end"
+    ]
+
+    testcase.append('\n{0}\n\n'.format('\n'.join(waitloop)))
+
+    # add assertions to testbench code
+    for state in state_vector.states:
+        if state.startswith('INST'):
+            continue
+
+        msg = "Testcase #{0} {1}".format(testcase_no, testcase_uuid)
+        testcase.append(VUNIT_EXPECT_FMT[state].format(expected[state], msg))
+
+    testcase.append('\n')
+
+    return testcase, progmem
+
+
+if __name__ == '__main__':
+    ZEX_FILE = 'zex.txt'
+    TESTCASE_FILE = 'testcase.v'
+    PROGMEM_FILE = 'progmem.txt'
+    DATAMEM_FILE = 'datamem.txt'
+
+    # read test description
+    with open(ZEX_FILE) as infile:
+        zex = infile.read()
+
+    # strip comments and trailing whitespace
+    zex = re.sub(r'(?m)\s*(;.*)?$', '', zex)
+
+    # remove empty lines
+    zex = '\n'.join([line for line in zex.split('\n') if line])
+
+    # parse components
+    pattern = r'''
+    ^
+    name:\s+(.*)\s+
+    desc:\s+(.*)\s+
+    base:\s+(.*)\s+
+    cycle:\s+(.*)
+    $
+    '''
+
+    m = re.match(pattern, zex, re.VERBOSE)
+    if not m:
+        raise ValueError("malformatted test description file")
+
+    name = m.group(1)
+    desc = m.group(2)
+    base = StateVector.parse(m.group(3))
+    cycle = StateVector.parse(m.group(4))
+
+    # generate testcase files
+    testcase_out = open(TESTCASE_FILE, 'w')
+    progmem_out = open(PROGMEM_FILE, 'w')
+    datamem_out = open(DATAMEM_FILE, 'w')
+
+    try:
+        # randomly fill data memory
+        datamem = []
+        for addr in range(4096):
+            row = '@{0:04X} {1:02X}\n'.format(addr, random.randint(0, 255))
+            datamem.append(row)
+
+        datamem_out.writelines(datamem)
+
+        testcase_out.write('unit.start("{0} ({1})");\n\n'.format(name, desc))
+
+        cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
+        cycles = list(range(2**len(cycle_pos)))
+
+        for testcase_no, cycle in enumerate(cycles):
+            vect = base.copy()
+
+            if cycle > 0:
+                setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
+                for i, b in enumerate(setbits):
+                    vect.bitvector[cycle_pos[i - 1]] = int(b)
+
+            vect.randomize()
+            testcase, progmem = generate_testcase(testcase_no, vect)
+
+            testcase_out.writelines(testcase)
+            progmem_out.writelines(progmem)
+    finally:
+        testcase_out.close()
+        progmem_out.close()
+        datamem_out.close()

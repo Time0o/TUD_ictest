@@ -1,0 +1,16 @@
+#!/usr/bin/expect -f
+
+set bin [lindex $argv 0];
+set setflags [lindex $argv 1];
+
+spawn z80sim
+expect ">>>"
+send "x f\r"
+expect "F ="
+send "$setflags\r"
+expect ">>>"
+send "r $bin\r"
+expect ">>>"
+send "g\r"
+expect ">>>"
+send "quit\r"
