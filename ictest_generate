@@ -1,11 +1,12 @@
 #!/usr/bin/env python2
 
+import math
 import os
 import random
 import re
 import subprocess
+import sys
 import uuid
-
 
 class StateVector:
     STATE_WIDTHS = {
@@ -37,9 +38,8 @@ class StateVector:
         states = []
         bitvector = []
 
-        #TODO: sort by state?
         for word in fmt.split(','):
-            m = re.match('^(\w+):([0-9a-fA-FxX]+)(b|h)$', word.strip())
+            m = re.match('^([\w\']+):([0-9a-fA-FxX]+)(b|h)$', word.strip())
             if not m:
                 err = "malformed state vector element: {0}".format(word)
                 raise ValueError(err)
@@ -75,50 +75,67 @@ class StateVector:
 
 
 def generate_testcase(testcase_no, state_vector, runsim):
-   #TODO: load alternate registers
     ASM_STATE_FMT = {
-        'A'  : " LD A,{0:03X}H\n",
-        'BC' : " LD BC,{0:05X}H\n",
-        'DE' : " LD DE,{0:05X}H\n",
-        'HL' : " LD HL,{0:05X}H\n",
-        'IX' : " LD IX,{0:05X}H\n",
-        'IY' : " LD IY,{0:05X}H\n",
-        'SP' : " LD SP,{0:05X}H\n"
+        "A"    : " LD A,{0:03X}H\n",
+        "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
+        "BC"   : " LD BC,{0:05X}H\n",
+        "B'C'" : " EXX\n LD BC,{0:05X}H\n EXX\n",
+        "DE"   : " LD DE,{0:05X}H\n",
+        "D'E'" : " EXX\n LD DE,{0:05X}H\n EXX\n",
+        "HL"   : " LD HL,{0:05X}H\n",
+        "H'L'" : " EXX\n LD HL,{0:05X}H\n EXX\n",
+        "IX"   : " LD IX,{0:05X}H\n",
+        "IY"   : " LD IY,{0:05X}H\n",
+        "SP"   : " LD SP,{0:05X}H\n"
     }
 
-    VUNIT_STATE_FMT = {
-        "A"    : "z80_i.cpu_i.datapath_i.reg_accu_i.q = 8'h{0:02X};\n",
-        "A'"   : "z80_i.cpu_i.datapath_i.reg_accu_p_i.q = 8'h{0:02X};\n",
-        "F"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q = 8'h{0:02X};\n",
-        "F'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q = 8'h{0:02X};\n",
-        "BC"   : "z80_i.cpu_i.datapath_i.regfile_i.bc = 16'h{0:04X};\n",
-        "B'C'" : "z80_i.cpu_i.datapath_i.regfile_i.bc_p = 16'h{0:04X};\n",
-        "DE"   : "z80_i.cpu_i.datapath_i.regfile_i.de = 16'h{0:04X};\n",
-        "D'E'" : "z80_i.cpu_i.datapath_i.regfile_i.de_p = 16'h{0:04X};\n",
-        "HL"   : "z80_i.cpu_i.datapath_i.regfile_i.hl = 16'h{0:04X};\n",
-        "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p = 16'h{0:04X};\n",
-        "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix = 16'h{0:04X};\n",
-        "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy = 16'h{0:04X};\n",
+    VUNIT_ELEMS = {
+        "A"    : "z80_i.cpu_i.datapath_i.reg_accu_i.q",
+        "A'"   : "z80_i.cpu_i.datapath_i.reg_accu_p_i.q",
+        "F"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q",
+        "F'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q",
+        "BC"   : "z80_i.cpu_i.datapath_i.regfile_i.bc",
+        "B'C'" : "z80_i.cpu_i.datapath_i.regfile_i.bc_p",
+        "DE"   : "z80_i.cpu_i.datapath_i.regfile_i.de",
+        "D'E'" : "z80_i.cpu_i.datapath_i.regfile_i.de_p",
+        "HL"   : "z80_i.cpu_i.datapath_i.regfile_i.hl",
+        "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p",
+        "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
+        "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
         "SP"   : "z80_i.cpu_i.datapath_i.sp = 16'h{0:04X};\n"
     }
 
-    VUNIT_EXPECT_FMT = {
-        "A"    : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_accu_i.q, \"A ({1})\");\n",
-        "A'"   : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_accu_p_i.q, \"A' ({1})\");\n",
-        "F"    : "unit.assert_eq8(8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_alu_flags_i.q, \"F ({1})\");\n",
-        "F'"   : "unit.assert_eq8( 8'h{0:02X}, z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q, \"F' ({1})\");\n",
-        "BC"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.bc, \"BC ({1})\");\n",
-        "B'C'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.bc_p, \"B'C' ({1})\");\n",
-        "DE"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.de, \"DE ({1})\");\n",
-        "D'E'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.de_p, \"D'E' ({1})\");\n",
-        "HL"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.hl, \"HL ({1})\");\n",
-        "H'L'" : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.hl_p, \"H'L' ({1})\");\n",
-        "IX"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.ix, \"IX ({1})\");\n",
-        "IY"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.iy, \"IY ({1})\");\n",
-        "SP"   : "unit.assert_eq16(16'h{0:04X}, z80_i.cpu_i.datapath_i.regfile_i.sp, \"SP ({1})\");\n"
+    VUNIT_STATE_FMT = {
+        "A"    : "{0} = 8'h{1:02X};\n",
+        "A'"   : "{0} = 8'h{1:02X};\n",
+        "F"    : "{0} = 8'h{1:02X};\n",
+        "F'"   : "{0} = 8'h{1:02X};\n",
+        "BC"   : "{0} = 16'h{1:04X};\n",
+        "B'C'" : "{0} = 16'h{1:04X};\n",
+        "DE"   : "{0} = 16'h{1:04X};\n",
+        "D'E'" : "{0} = 16'h{1:04X};\n",
+        "HL"   : "{0} = 16'h{1:04X};\n",
+        "H'L'" : "{0} = 16'h{1:04X};\n",
+        "IX"   : "{0} = 16'h{1:04X};\n",
+        "IY"   : "{0} = 16'h{1:04X};\n",
+        "SP"   : "{0} = 16'h{1:04X};\n"
     }
 
-    ASM = 'z80asm'
+    VUNIT_EXPECT_FMT = {
+        "A"    : "unit.assert_eq8(8'h{0:02X}, {1}, \"A ({2})\");\n",
+        "A'"   : "unit.assert_eq8(8'h{0:02X}, {1}, \"A' ({2})\");\n",
+        "F"    : "unit.assert_eq8(8'h{0:02X}, {1}, \"F ({2})\");\n",
+        "F'"   : "unit.assert_eq8(8'h{0:02X}, {1}, \"F' ({2})\");\n",
+        "BC"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"BC ({2})\");\n",
+        "B'C'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"B'C' ({2})\");\n",
+        "DE"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"DE ({2})\");\n",
+        "D'E'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"D'E' ({2})\");\n",
+        "HL"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"HL ({2})\");\n",
+        "H'L'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"H'L' ({2})\");\n",
+        "IX"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"IX ({2})\");\n",
+        "IY"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"IY ({2})\");\n",
+        "SP"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"SP ({2})\");\n"
+    }
 
     # testcase identifier
     testcase_uuid = str(uuid.uuid4())[:8]
@@ -126,6 +143,8 @@ def generate_testcase(testcase_no, state_vector, runsim):
     # z80sim input
     init_asm = ['START:\n']
     init_flags = '0x00'
+    init_flags_p = '0x00'
+
     test_ops = []
 
     # ncsim input
@@ -145,12 +164,14 @@ def generate_testcase(testcase_no, state_vector, runsim):
             test_ops.append(chr(binvalue))
             progmem.append('{0:02X}\n'.format(binvalue))
         else:
-            testcase.append(VUNIT_STATE_FMT[state].format(binvalue))
+            vunit_state_fmt = VUNIT_STATE_FMT[state]
+            vunit_state = vunit_state_fmt.format(VUNIT_ELEMS[state], binvalue)
+            testcase.append(vunit_state)
 
             if state == 'F':
                 init_flags = '{0:02X}'.format(binvalue)
             elif state == "F'":
-                raise ValueError('TODO') #TODO
+                init_flags_p = '{0:02X}'.format(binvalue)
             else:
                 init_asm.append(ASM_STATE_FMT[state].format(binvalue))
 
@@ -168,12 +189,12 @@ def generate_testcase(testcase_no, state_vector, runsim):
         asm_tmp.writelines(init_asm)
         asm_tmp.close()
 
-        z80asm = subprocess.Popen([ASM, asm_tmp.name], stdout=devnull)
+        z80asm = subprocess.Popen(['z80asm', asm_tmp.name], stdout=devnull)
         z80asm.wait()
 
         # inject instruction bytes
         data = bin_tmp.read()
-        instructions = [data[i:i+1] for i in range(len(data))]
+        instructions = [data[i:(i + 1)] for i in range(len(data))]
 
         for op in test_ops:
             instructions.insert(-1, op)
@@ -183,7 +204,7 @@ def generate_testcase(testcase_no, state_vector, runsim):
         bin_tmp.close()
 
         z80sim = subprocess.Popen(
-            [runsim, bin_tmp.name, init_flags],
+            [runsim, bin_tmp.name, init_flags, init_flags_p],
             stdout=subprocess.PIPE)
 
         z80sim.wait()
@@ -235,7 +256,10 @@ def generate_testcase(testcase_no, state_vector, runsim):
             continue
 
         msg = "Testcase #{0} {1}".format(testcase_no, testcase_uuid)
-        testcase.append(VUNIT_EXPECT_FMT[state].format(expected[state], msg))
+        vunit_expect_fmt = VUNIT_EXPECT_FMT[state]
+        vunit_expect = vunit_expect_fmt.format(expected[state],
+                                               VUNIT_ELEMS[state], msg)
+        testcase.append(vunit_expect)
 
     testcase.append('\n')
 
@@ -243,10 +267,15 @@ def generate_testcase(testcase_no, state_vector, runsim):
 
 
 if __name__ == '__main__':
+    PROGMEM_SIZE = 4096
+    DATAMEM_SIZE = 512
+
     ZEX_FILE = 'zex.txt'
     TESTCASE_FILE = 'testcase.v'
     PROGMEM_FILE = 'progmem.txt'
     DATAMEM_FILE = 'datamem.txt'
+    DATAMEM_BIN_FILE = 'datamem.bin'
+    RUNSIM_FILE = 'runsim.exp'
 
     # read test description
     with open(ZEX_FILE) as infile:
@@ -278,49 +307,77 @@ if __name__ == '__main__':
     cycle = StateVector.parse(m.group(4))
 
     # generate testcase files
-    testcase_out = open(TESTCASE_FILE, 'w')
-    progmem_out = open(PROGMEM_FILE, 'w')
-    datamem_out = open(DATAMEM_FILE, 'w')
+    testcase_out = open(TESTCASE_FILE, 'w+')
+    progmem_out = open(PROGMEM_FILE, 'w+')
+    datamem_out = open(DATAMEM_FILE, 'w+')
+    datamem_bin_out = open(DATAMEM_BIN_FILE, 'w+')
+    runsim_out = open(RUNSIM_FILE, 'w+')
 
-    runsim = open('tmp.exp', 'w+')
+    os.chmod(RUNSIM_FILE, 500)
 
-    runsim.writelines([
-        '#!/usr/bin/expect -f\n',
-        '\n',
-        'set bin [lindex $argv 0];\n',
-        'set setflags [lindex $argv 1];\n',
-        '\n',
-        'spawn z80sim\n',
-        'expect ">>>"\n',
-        'send "x f\\r"\n',
-        'expect "F = "\n',
-        'send "$setflags\\r"\n',
-        'expect ">>>"\n',
-        'send "r $bin\\r"\n',
-        'expect ">>>"\n',
-        'send "g\\r"\n',
-        'expect ">>>"\n',
-        'send "quit\\r"'
-    ])
-    runsim.close()
+    # create random data memory
+    datamem = []
+    datamem_bin = [255, 0, 0]
+    for addr in range(DATAMEM_SIZE):
+        rand_val = random.randint(0, 255)
 
-    os.chmod(runsim.name, 500)
+        datamem.append('@{0:04X} {1:02X}\n'.format(addr, rand_val))
+        datamem_bin.append(rand_val)
+
+    datamem_bin = bytes(bytearray(datamem_bin))
 
     try:
-        # randomly fill data memory
-        datamem = []
-        for addr in range(4096):
-            row = '@{0:04X} {1:02X}\n'.format(addr, random.randint(0, 255))
-            datamem.append(row)
+        # create z80 simulator expect file
+        runsim_out.writelines([
+            '#!/usr/bin/expect -f\n',
+            '\n',
+            'set prog_bin  [lindex $argv 0];\n',
+            'set setflags  [lindex $argv 1];\n',
+            'set setflagsp [lindex $argv 2];\n',
+            '\n',
+            'spawn z80sim\n',
+            'expect ">>>"\n',
+            'send "x f\\r"\n',
+            'expect "F = "\n',
+            'send "$setflags\\r"\n',
+            'expect ">>>"\n',
+            'send "x f\'\\r"\n',
+            'expect "F\' = "\n',
+            'send "$setflagsp\\r"\n',
+            'expect ">>>"\n',
+            'send "r $prog_bin,0\\r"\n',
+            'expect ">>>"\n',
+            'send "v 0,{0},{1}\r"\n'.format(DATAMEM_SIZE, PROGMEM_SIZE),
+            'expect ">>>"\n',
+            'send "r {0},0\\r"\n'.format(DATAMEM_BIN_FILE),
+            'expect ">>>"\n',
+            'send "g {0}\\r"\n'.format(DATAMEM_SIZE),
+            'expect ">>>"\n',
+            'send "quit\\r"'
+        ])
+        runsim_out.close()
 
+        # fill data memory
         datamem_out.writelines(datamem)
+        datamem_out.close()
 
+        datamem_bin_out.write(datamem_bin)
+        datamem_bin_out.close()
+
+        # begin creating testcase file
         testcase_out.write('unit.start("{0} ({1})");\n\n'.format(name, desc))
 
+        # state vector cycle positions
         cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
         cycles = list(range(2**len(cycle_pos)))
 
         for testcase_no, cycle in enumerate(cycles):
+            # display progress indicator
+            progress = float(testcase_no) / len(cycles) * 100
+            sys.stdout.write("\rgenerating testcase: {0:.0f}%".format(progress))
+            sys.stdout.flush()
+
+            # create state vector variant
             vect = base.copy()
 
             if cycle > 0:
@@ -329,18 +386,23 @@ if __name__ == '__main__':
                     vect.bitvector[cycle_pos[i - 1]] = int(b)
 
             vect.randomize()
-            testcase, progmem = generate_testcase(testcase_no, vect,
-                                                  './' + runsim.name)
 
+            # generate testcase and update files
+            testcase, progmem = generate_testcase(testcase_no, vect,
+                                                  './' + RUNSIM_FILE)
             testcase_out.writelines(testcase)
             progmem_out.writelines(progmem)
 
         testcase_out.write('unit.finish("{0} ({1})");\n'.format(name, desc))
 
+        sys.stdout.write('\n')
+
     finally:
         testcase_out.close()
         progmem_out.close()
         datamem_out.close()
+        datamem_bin_out.close()
+        runsim_out.close()
 
-        runsim.close()
-        os.remove(runsim.name)
+        os.remove(RUNSIM_FILE)
+        os.remove(DATAMEM_BIN_FILE)
