@@ -74,7 +74,7 @@ class StateVector:
             b if b != 'x' else random.randint(0, 1) for b in self.bitvector]
 
 
-def generate_testcase(testcase_no, state_vector, runsim):
+def generate_test(test_no, state_vector, runsim):
     ASM_STATE_FMT = {
         "A"    : " LD A,{0:03X}H\n",
         "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
@@ -137,8 +137,8 @@ def generate_testcase(testcase_no, state_vector, runsim):
         "SP"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"SP ({2})\");\n"
     }
 
-    # testcase identifier
-    testcase_uuid = str(uuid.uuid4())[:8]
+    # test identifier
+    test_uuid = str(uuid.uuid4())[:8]
 
     # z80sim input
     init_asm = ['START:\n']
@@ -149,9 +149,9 @@ def generate_testcase(testcase_no, state_vector, runsim):
 
     # ncsim input
     test_heading_fmt = "// BEGIN TESTCASE #{0} {1}\n"
-    test_heading = test_heading_fmt.format(testcase_no, testcase_uuid)
+    test_heading = test_heading_fmt.format(test_no, test_uuid)
 
-    testcase = [test_heading]
+    test = [test_heading]
     progmem = [test_heading]
 
     offs = 0
@@ -166,7 +166,7 @@ def generate_testcase(testcase_no, state_vector, runsim):
         else:
             vunit_state_fmt = VUNIT_STATE_FMT[state]
             vunit_state = vunit_state_fmt.format(VUNIT_ELEMS[state], binvalue)
-            testcase.append(vunit_state)
+            test.append(vunit_state)
 
             if state == 'F':
                 init_flags = '{0:02X}'.format(binvalue)
@@ -194,7 +194,7 @@ def generate_testcase(testcase_no, state_vector, runsim):
 
         # inject instruction bytes
         data = bin_tmp.read()
-        instructions = [data[i:(i + 1)] for i in range(len(data))]
+        instructions = [data[i:i+1] for i in range(len(data))]
 
         for op in test_ops:
             instructions.insert(-1, op)
@@ -248,25 +248,27 @@ def generate_testcase(testcase_no, state_vector, runsim):
         "end"
     ]
 
-    testcase.append('\n{0}\n\n'.format('\n'.join(waitloop)))
+    test.append('\n{0}\n\n'.format('\n'.join(waitloop)))
 
     # add assertions to testbench code
     for state in state_vector.states:
         if state.startswith('INST'):
             continue
 
-        msg = "Testcase #{0} {1}".format(testcase_no, testcase_uuid)
+        msg = "Testcase #{0} {1}".format(test_no, test_uuid)
         vunit_expect_fmt = VUNIT_EXPECT_FMT[state]
         vunit_expect = vunit_expect_fmt.format(expected[state],
                                                VUNIT_ELEMS[state], msg)
-        testcase.append(vunit_expect)
+        test.append(vunit_expect)
 
-    testcase.append('\n')
+    test.append('\n')
 
-    return testcase, progmem
+    return test, progmem
 
 
 if __name__ == '__main__':
+    MAXTESTS = 1024
+
     PROGMEM_SIZE = 4096
     DATAMEM_SIZE = 512
 
@@ -305,6 +307,14 @@ if __name__ == '__main__':
     desc = m.group(2)
     base = StateVector.parse(m.group(3))
     cycle = StateVector.parse(m.group(4))
+
+    # state vector cycle positions
+    cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
+    cycles = list(range(2**len(cycle_pos)))
+
+    if (len(cycles) > MAXTESTS):
+        err = "trying to generate {0} tests (maximum is {1})"
+        raise ValueError(err.format(len(cycles), MAXTESTS))
 
     # generate testcase files
     testcase_out = open(TESTCASE_FILE, 'w+')
@@ -367,14 +377,10 @@ if __name__ == '__main__':
         # begin creating testcase file
         testcase_out.write('unit.start("{0} ({1})");\n\n'.format(name, desc))
 
-        # state vector cycle positions
-        cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
-        cycles = list(range(2**len(cycle_pos)))
-
-        for testcase_no, cycle in enumerate(cycles):
-            # display progress indicator
-            progress = float(testcase_no) / len(cycles) * 100
-            sys.stdout.write("\rgenerating testcase: {0:.0f}%".format(progress))
+        for test_no, cycle in enumerate(cycles):
+            # display progress
+            fmt = "\rgenerating test {0}/{1}"
+            sys.stdout.write(fmt.format(test_no + 1, len(cycles)))
             sys.stdout.flush()
 
             # create state vector variant
@@ -387,10 +393,9 @@ if __name__ == '__main__':
 
             vect.randomize()
 
-            # generate testcase and update files
-            testcase, progmem = generate_testcase(testcase_no, vect,
-                                                  './' + RUNSIM_FILE)
-            testcase_out.writelines(testcase)
+            # generate test and update files
+            test, progmem = generate_test(test_no, vect, './' + RUNSIM_FILE)
+            testcase_out.writelines(test)
             progmem_out.writelines(progmem)
 
         testcase_out.write('unit.finish("{0} ({1})");\n'.format(name, desc))
