@@ -267,7 +267,7 @@ def generate_test(test_no, state_vector, runsim):
 
 
 if __name__ == '__main__':
-    MAXTESTS = 1024
+    MAXTESTS = 2048
 
     PROGMEM_SIZE = 4096
     DATAMEM_SIZE = 512
