@@ -117,7 +117,7 @@ class MemCheck:
         self.expected = []
 
 
-def generate_test(test_no, state_vector, mem_checks, runsim):
+def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
     ASM_STATE_FMT = {
         "A"    : " LD A,{0:03X}H\n",
         "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
@@ -137,6 +137,18 @@ def generate_test(test_no, state_vector, mem_checks, runsim):
         "A'"   : "z80_i.cpu_i.datapath_i.reg_accu_p_i.q",
         "F"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q",
         "F'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q",
+        "S"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_S]",
+        "S'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_S]",
+        "Z"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_Z]",
+        "Z'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_Z]",
+        "H"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_H]",
+        "H'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_H]",
+        "PV"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_PV]",
+        "PV'"  : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_PV]",
+        "N"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_N]",
+        "N'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_N]",
+        "C"    : "z80_i.cpu_i.datapath_i.reg_alu_flags_i.q[ALU_FLAG_C]",
+        "C'"   : "z80_i.cpu_i.datapath_i.reg_alu_flags_p_i.q[ALU_FLAG_C]",
         "BC"   : "z80_i.cpu_i.datapath_i.regfile_i.bc",
         "B'C'" : "z80_i.cpu_i.datapath_i.regfile_i.bc_p",
         "DE"   : "z80_i.cpu_i.datapath_i.regfile_i.de",
@@ -170,8 +182,18 @@ def generate_test(test_no, state_vector, mem_checks, runsim):
     VUNIT_EXPECT_FMT = {
         "A"    : "unit.assert_eq8(8'h{0:02X}, {1},\n\"A ({2})\");\n",
         "A'"   : "unit.assert_eq8(8'h{0:02X}, {1},\n\"A' ({2})\");\n",
-        "F"    : "unit.assert_eq8(8'h{0:02X}, {1},\n\"F ({2})\");\n",
-        "F'"   : "unit.assert_eq8(8'h{0:02X}, {1},\n\"F' ({2})\");\n",
+        "S"    : "unit.assert_eq8(1'b{0}, {1},\n\"S ({2})\");\n",
+        "S'"   : "unit.assert_eq8(1'b{0}, {1},\n\"S' ({2})\");\n",
+        "Z"    : "unit.assert_eq8(1'b{0}, {1},\n\"Z ({2})\");\n",
+        "Z'"   : "unit.assert_eq8(1'b{0}, {1},\n\"Z' ({2})\");\n",
+        "H"    : "unit.assert_eq8(1'b{0}, {1},\n\"H ({2})\");\n",
+        "H'"   : "unit.assert_eq8(1'b{0}, {1},\n\"H' ({2})\");\n",
+        "PV"   : "unit.assert_eq8(1'b{0}, {1},\n\"PV ({2})\");\n",
+        "PV'"  : "unit.assert_eq8(1'b{0}, {1},\n\"PV' ({2})\");\n",
+        "N"    : "unit.assert_eq8(1'b{0}, {1},\n\"N ({2})\");\n",
+        "N'"   : "unit.assert_eq8(1'b{0}, {1},\n\"N' ({2})\");\n",
+        "C"    : "unit.assert_eq8(1'b{0}, {1},\n\"C ({2})\");\n",
+        "C'"   : "unit.assert_eq8(1'b{0}, {1},\n\"C' ({2})\");\n",
         "BC"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"BC ({2})\");\n",
         "B'C'" : "unit.assert_eq16(16'h{0:04X}, {1},\n\"B'C' ({2})\");\n",
         "DE"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"DE ({2})\");\n",
@@ -185,6 +207,8 @@ def generate_test(test_no, state_vector, mem_checks, runsim):
         "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"DMEM ({3})\");\n",
         "DMEM_SWP" : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
     }
+
+    VUNIT_FLAG_ORDER = ['S', 'Z', 'H', 'PV', 'N', 'C']
 
     # z80sim input
     init_asm = ['START:\n']
@@ -296,12 +320,40 @@ def generate_test(test_no, state_vector, mem_checks, runsim):
     values = [v.strip() for v in values.split()]
 
     reg_expected = {}
+    flag_expected = {}
     for r, v in zip(regs, values):
         if r == 'SZHPNC':
-            reg_expected['F'] = int('{0}0{1}0{2}'.format(v[:2], v[2], v[3:]), 2)
+            flags = [int(b, 2) for b in v]
+            if not flagignore & 0x80:
+                flag_expected['S'] = flags[0]
+            if not flagignore & 0x40:
+                flag_expected['Z'] = flags[1]
+            if not flagignore & 0x10:
+                flag_expected['H'] = flags[2]
+            if not flagignore & 0x04:
+                flag_expected['PV'] = flags[3]
+            if not flagignore & 0x02:
+                flag_expected['N'] = flags[4]
+            if not flagignore & 0x01:
+                flag_expected['C'] = flags[5]
+
         elif r == "A'F'":
             reg_expected["A'"] = int(v[:2], 16)
-            reg_expected["F'"] = int(v[2:], 16)
+
+            flags = [int(b, 2) for b in '{0:08b}'.format(int(v[2:], 16))]
+            if not flagignore & 0x80:
+                flag_expected["S'"] = flags[0]
+            if not flagignore & 0x40:
+                flag_expected["Z'"] = flags[1]
+            if not flagignore & 0x10:
+                flag_expected["H'"] = flags[3]
+            if not flagignore & 0x04:
+                flag_expected["PV'"] = flags[5]
+            if not flagignore & 0x02:
+                flag_expected["N'"] = flags[6]
+            if not flagignore & 0x01:
+                flag_expected["C'"] = flags[7]
+
         elif r in state_vector.states:
             reg_expected[r] = int(v, 16)
 
@@ -335,12 +387,22 @@ def generate_test(test_no, state_vector, mem_checks, runsim):
 
     # add register assertions to testbench code
     for state in state_vector.states:
-        if state.startswith('INST'):
+        if state in ['INST1', 'INST2', 'INST3', 'INST4', 'F', "F'"]:
             continue
 
         fmt = VUNIT_EXPECT_FMT[state]
         msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
         expect = fmt.format(reg_expected[state], VUNIT_ELEMS[state], msg)
+
+        test.append(expect)
+
+    for flag in VUNIT_FLAG_ORDER:
+        if flag not in flag_expected:
+            continue
+
+        fmt = VUNIT_EXPECT_FMT[flag]
+        msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
+        expect = fmt.format(flag_expected[flag], VUNIT_ELEMS[flag], msg)
 
         test.append(expect)
 
@@ -400,6 +462,7 @@ if __name__ == '__main__':
     base:\s+(.*)\s+
     cycle:\s+(.*)
     (?:\s+memcheck:\s+(.*))?
+    (?:\s+flagignore:\s+(.*))?
     $
     '''
 
@@ -411,7 +474,11 @@ if __name__ == '__main__':
     desc = m.group(2)
     base = StateVector.parse(m.group(3))
     cycle = StateVector.parse(m.group(4))
+
     mem_checks = MemCheck.parse(m.group(5))
+
+    m = re.match('([0-9a-fA-F]{2})h', m.group(6))
+    flagignore = int(m.group(1), 16) if m else 0x00
 
     # state vector cycle positions
     cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
@@ -514,7 +581,7 @@ if __name__ == '__main__':
                 mem_checks.clear()
 
             # generate test and update files
-            test, progmem = generate_test(test_no, vect, mem_checks,
+            test, progmem = generate_test(test_no, vect, flagignore, mem_checks,
                                           './' + RUNSIM_FILE)
             testcase_out.writelines(test)
             progmem_out.writelines(progmem)
