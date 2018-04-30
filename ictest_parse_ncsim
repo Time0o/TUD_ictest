@@ -1,0 +1,72 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use constant {
+    IDLE           => 0,
+    PARSE_WARNINGS => 1,
+    PARSE_ERRORS   => 2,
+    PARSE_VUNIT    => 3
+};
+
+my $state = IDLE;
+my $failures;
+
+sub summary {
+    if ($failures == 0) {
+        printf "==> \033[0;32mno failures\033[0m\n";
+    } else {
+        printf "==> \033[0;31m%d failure(s)\033[0m in total\n", $failures;
+    }
+    exit;
+}
+
+while(my $line = <>) {
+    if ($state == IDLE) {
+        if ($line =~ /^\s*- WARNING messages\s*:\s*$/) {
+            $state = PARSE_WARNINGS;
+        } elsif ($line =~ /^\s*- ERROR messages\s*:\s*$/) {
+            $state = PARSE_ERRORS;
+        } elsif ($line =~ /^\| VUNIT START (.*)$/) {
+            $failures = 0;
+            $state = PARSE_VUNIT;
+            printf "Running testcase '%s'\n", $1;
+        }
+    }
+    elsif ($state == PARSE_WARNINGS) {
+        if ($line =~ /^\s*\d+ WARNING messages\s*$/) {
+            $state = IDLE;
+        } else {
+            $line =~ s/^\s*\d+\s*/\033[0;33mWARNING:\033[0m /g;
+            print STDERR $line
+        }
+    }
+    elsif ($state == PARSE_ERRORS) {
+        if ($line =~ /^\s*\d+ ERROR messages\s*$/) {
+            exit 1;
+        } else {
+            $line =~ s/^\s*\d+\s*/\033[0;31mERROR:\033[0m /g;
+            print STDERR $line
+        }
+    }
+    elsif ($state == PARSE_VUNIT) {
+        if ($line =~ /\| VUNIT ASSERT (?:EQ|TRUE) FAIL (.*)/) {
+            ++$failures;
+            printf STDERR "\033[0;31mAssertion failed:\033[0m %s\n", $1;
+            last;
+        } elsif ($line =~ /\| VUNIT EXPECT (?:EQ|TRUE) FAIL (.*)/) {
+            ++$failures;
+            printf STDERR "\033[0;31mExpectation failed:\033[0m %s\n", $1;
+        } elsif ($line =~ /\| VUNIT FAIL (.*)/) {
+            ++$failures;
+            printf STDERR "\033[0;31mExplicit failure:\033[0m %s\n", $1;
+            last;
+        } elsif ($line =~ /\| VUNIT FINISH (.*)/) {
+            printf "Testcase '%s' done\n", $1;
+            last;
+        }
+    }
+}
+
+summary();

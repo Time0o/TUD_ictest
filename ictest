@@ -13,9 +13,24 @@ case $1 in
 "generate")
     ictest_generate
     ;;
+
 "run")
-    ictest_run
+    if [ ! -f testcase.v ]; then
+        echo "No testcase source file found" 1>&2
+        exit 1
+    fi
+
+    echo "Generating makefile..."
+    icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR
+    if [ $? -eq 0 ]; then
+        echo "Makefile generation failed, check logfile" 1>&2
+        exit 2
+    fi
+
+    echo "Running simulation..."
+    icncsim runBatch 2>&1 | ictest_parse_ncsim
     ;;
+
 *)
     echo "Unknown option '$1'" 1>&2
     usage
