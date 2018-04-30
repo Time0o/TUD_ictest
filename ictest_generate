@@ -74,7 +74,50 @@ class StateVector:
             b if b != 'x' else random.randint(0, 1) for b in self.bitvector]
 
 
-def generate_test(test_no, state_vector, runsim):
+class MemCheck:
+    MNEMONICS = {
+        "(BC)" : ["id", "BC"],
+        "(DE)" : ["id", "DE"],
+        "(HL)" : ["id", "HL"],
+        "(SP)" : ["id", "SP"],
+        "(IX + INST3)" : ["+", "IX", "INST3"],
+        "(IY + INST3)" : ["+", "IY", "INST3"]
+    }
+
+    def __init__(self, states, pre, addrs=None, expected=None):
+        self.states = states
+        self.pre = pre
+        self.addrs = addrs or []
+        self.expected = expected or []
+
+    @classmethod
+    def parse(cls, fmt):
+        if not fmt:
+            return None
+
+        states = []
+        pre = {}
+        for mnemonic in [m.strip() for m in fmt.split(',')]:
+            if mnemonic not in MemCheck.MNEMONICS:
+                err = "malformed memory check element: {0}".format(mnemonic)
+                raise ValueError(err)
+
+            states.append(mnemonic)
+
+            for m in MemCheck.MNEMONICS[mnemonic][1:]:
+                pre[m] = None
+
+        return MemCheck(states, pre)
+
+    def clear(self):
+        for key in self.pre:
+            self.pre[key] = None
+
+        self.addrs = []
+        self.expected = []
+
+
+def generate_test(test_no, state_vector, mem_checks, runsim):
     ASM_STATE_FMT = {
         "A"    : " LD A,{0:03X}H\n",
         "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
@@ -102,7 +145,10 @@ def generate_test(test_no, state_vector, runsim):
         "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p",
         "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
         "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
-        "SP"   : "z80_i.cpu_i.datapath_i.sp = 16'h{0:04X};\n"
+        "SP"   : "z80_i.cpu_i.datapath_i.sp",
+        "PMEM" : "z80_i.memory_control_i.progmem_mock_i.progmem",
+        "DMEM" : "z80_i.memory_control_i.datamem_mock_i.datamem",
+        "DMEM_SWP" : "z80_i.memory_control_i.datamem_mock_i.datamem_swp"
     }
 
     VUNIT_STATE_FMT = {
@@ -122,23 +168,23 @@ def generate_test(test_no, state_vector, runsim):
     }
 
     VUNIT_EXPECT_FMT = {
-        "A"    : "unit.assert_eq8(8'h{0:02X}, {1}, \"A ({2})\");\n",
-        "A'"   : "unit.assert_eq8(8'h{0:02X}, {1}, \"A' ({2})\");\n",
-        "F"    : "unit.assert_eq8(8'h{0:02X}, {1}, \"F ({2})\");\n",
-        "F'"   : "unit.assert_eq8(8'h{0:02X}, {1}, \"F' ({2})\");\n",
-        "BC"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"BC ({2})\");\n",
-        "B'C'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"B'C' ({2})\");\n",
-        "DE"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"DE ({2})\");\n",
-        "D'E'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"D'E' ({2})\");\n",
-        "HL"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"HL ({2})\");\n",
-        "H'L'" : "unit.assert_eq16(16'h{0:04X}, {1}, \"H'L' ({2})\");\n",
-        "IX"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"IX ({2})\");\n",
-        "IY"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"IY ({2})\");\n",
-        "SP"   : "unit.assert_eq16(16'h{0:04X}, {1}, \"SP ({2})\");\n"
+        "A"    : "unit.assert_eq8(8'h{0:02X}, {1},\n\"A ({2})\");\n",
+        "A'"   : "unit.assert_eq8(8'h{0:02X}, {1},\n\"A' ({2})\");\n",
+        "F"    : "unit.assert_eq8(8'h{0:02X}, {1},\n\"F ({2})\");\n",
+        "F'"   : "unit.assert_eq8(8'h{0:02X}, {1},\n\"F' ({2})\");\n",
+        "BC"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"BC ({2})\");\n",
+        "B'C'" : "unit.assert_eq16(16'h{0:04X}, {1},\n\"B'C' ({2})\");\n",
+        "DE"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"DE ({2})\");\n",
+        "D'E'" : "unit.assert_eq16(16'h{0:04X}, {1},\n\"D'E' ({2})\");\n",
+        "HL"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"HL ({2})\");\n",
+        "H'L'" : "unit.assert_eq16(16'h{0:04X}, {1},\n\"H'L' ({2})\");\n",
+        "IX"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IX ({2})\");\n",
+        "IY"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IY ({2})\");\n",
+        "SP"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"SP ({2})\");\n",
+        "PMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"PMEM ({3})\");\n",
+        "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"DMEM ({3})\");\n",
+        "DMEM_SWP" : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
     }
-
-    # test identifier
-    test_uuid = str(uuid.uuid4())[:8]
 
     # z80sim input
     init_asm = ['START:\n']
@@ -148,8 +194,8 @@ def generate_test(test_no, state_vector, runsim):
     test_ops = []
 
     # ncsim input
-    test_heading_fmt = "// BEGIN TESTCASE #{0} {1}\n"
-    test_heading = test_heading_fmt.format(test_no, test_uuid)
+    test_heading_fmt = "// BEGIN TESTCASE #{0}\n"
+    test_heading = test_heading_fmt.format(test_no)
 
     test = [test_heading]
     progmem = [test_heading]
@@ -174,6 +220,9 @@ def generate_test(test_no, state_vector, runsim):
                 init_flags_p = '{0:02X}'.format(binvalue)
             else:
                 init_asm.append(ASM_STATE_FMT[state].format(binvalue))
+
+        if mem_checks and state in mem_checks.pre:
+            mem_checks.pre[state] = binvalue
 
         offs += width
 
@@ -203,10 +252,26 @@ def generate_test(test_no, state_vector, runsim):
         bin_tmp.write(b''.join(instructions))
         bin_tmp.close()
 
-        z80sim = subprocess.Popen(
-            [runsim, bin_tmp.name, init_flags, init_flags_p],
-            stdout=subprocess.PIPE)
+        args = [runsim, bin_tmp.name, init_flags, init_flags_p]
 
+        if mem_checks:
+            for state in mem_checks.states:
+                components = MemCheck.MNEMONICS[state]
+                operator, operands = components[0], components[1:]
+
+                if operator == 'id':
+                    addr = mem_checks.pre[operands[0]]
+                elif operator == '+':
+                    addr = sum([mem_checks.pre[op] for op in operands])
+                else:
+                    err = "unrecognized memcheck operator: {0}"
+                    raise ValueError(err.format(operator))
+
+                mem_checks.addrs.append(addr)
+
+            args += ['{0:04x}'.format(a) for a in mem_checks.addrs]
+
+        z80sim = subprocess.Popen(args, stdout=subprocess.PIPE)
         z80sim.wait()
 
     finally:
@@ -219,20 +284,38 @@ def generate_test(test_no, state_vector, runsim):
 
     # parse simulation results
     simout = z80sim.stdout.read()
-    regs, values = re.search(r'HALT.*\s+(.*)\s+(.*)\s+>>>', simout).groups()
 
-    expected = {}
+    m = re.search(r'HALT.*\s+(.*)\n(.*)\n>>>', simout)
+    if not m:
+        err = "an error occured during simulation, check for illegal opcodes"
+        raise ValueError(err)
+
+    # obtain expected register values
+    regs, values = m.groups()
     regs = [r.strip() for r in regs.split()]
     values = [v.strip() for v in values.split()]
 
+    reg_expected = {}
     for r, v in zip(regs, values):
         if r == 'SZHPNC':
-            expected['F'] = int('{0}0{1}0{2}'.format(v[:2], v[2], v[3:]), 2)
+            reg_expected['F'] = int('{0}0{1}0{2}'.format(v[:2], v[2], v[3:]), 2)
         elif r == "A'F'":
-            expected["A'"] = int(v[:2], 16)
-            expected["F'"] = int(v[2:], 16)
+            reg_expected["A'"] = int(v[:2], 16)
+            reg_expected["F'"] = int(v[2:], 16)
         elif r in state_vector.states:
-            expected[r] = int(v, 16)
+            reg_expected[r] = int(v, 16)
+
+    # optain expected memory locations
+    if mem_checks:
+        for addr in mem_checks.addrs:
+            addr_hex = '{0:04X}'.format(addr)
+            addr_lsn = int(addr_hex[3], 16)
+
+            simout = simout[m.end():]
+            m = re.search(r'Adr.*\n[0-9a-f]{4} - (.*)\t', simout)
+
+            mem_row = [int(val, 16) for val in m.group(1).split()]
+            mem_checks.expected.append(mem_row[addr_lsn])
 
     # add timeout loop to testbench code
     waitloop = [
@@ -250,16 +333,36 @@ def generate_test(test_no, state_vector, runsim):
 
     test.append('\n{0}\n\n'.format('\n'.join(waitloop)))
 
-    # add assertions to testbench code
+    # add register assertions to testbench code
     for state in state_vector.states:
         if state.startswith('INST'):
             continue
 
-        msg = "Testcase #{0} {1}".format(test_no, test_uuid)
-        vunit_expect_fmt = VUNIT_EXPECT_FMT[state]
-        vunit_expect = vunit_expect_fmt.format(expected[state],
-                                               VUNIT_ELEMS[state], msg)
-        test.append(vunit_expect)
+        fmt = VUNIT_EXPECT_FMT[state]
+        msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
+        expect = fmt.format(reg_expected[state], VUNIT_ELEMS[state], msg)
+
+        test.append(expect)
+
+    test.append('\n')
+
+    # add memory assertions to testbench code
+    if mem_checks:
+        for addr, exp in zip(mem_checks.addrs, mem_checks.expected):
+            fmt = VUNIT_EXPECT_FMT['DMEM']
+            msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
+            expect = fmt.format(exp, VUNIT_ELEMS['DMEM'], addr, msg)
+
+            test.append(expect)
+
+        test.append('\n')
+
+        for addr in mem_checks.addrs:
+            fmt = VUNIT_EXPECT_FMT['DMEM_SWP']
+            swp = fmt.format(VUNIT_ELEMS['DMEM'], addr,
+                             VUNIT_ELEMS['DMEM_SWP'], addr)
+
+            test.append(swp)
 
     test.append('\n')
 
@@ -296,6 +399,7 @@ if __name__ == '__main__':
     desc:\s+(.*)\s+
     base:\s+(.*)\s+
     cycle:\s+(.*)
+    (?:\s+memcheck:\s+(.*))?
     $
     '''
 
@@ -307,6 +411,7 @@ if __name__ == '__main__':
     desc = m.group(2)
     base = StateVector.parse(m.group(3))
     cycle = StateVector.parse(m.group(4))
+    mem_checks = MemCheck.parse(m.group(5))
 
     # state vector cycle positions
     cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
@@ -345,6 +450,10 @@ if __name__ == '__main__':
             'set setflags  [lindex $argv 1];\n',
             'set setflagsp [lindex $argv 2];\n',
             '\n',
+            'if { $::argc > 3 } {\n',
+            '    set mem_checks [lrange $argv 3 end];\n',
+            '}\n',
+            '\n',
             'spawn z80sim\n',
             'expect ">>>"\n',
             'send "x f\\r"\n',
@@ -363,6 +472,14 @@ if __name__ == '__main__':
             'expect ">>>"\n',
             'send "g {0}\\r"\n'.format(DATAMEM_SIZE),
             'expect ">>>"\n',
+            '\n',
+            'if {[info exists mem_checks]} {\n',
+            '    foreach mem_check $::mem_checks {\n',
+            '        send "d $mem_check\\r"\n',
+            '        expect ">>>"\n',
+            '    }\n',
+            '}\n',
+            '\n',
             'send "quit\\r"'
         ])
         runsim_out.close()
@@ -393,8 +510,12 @@ if __name__ == '__main__':
 
             vect.randomize()
 
+            if mem_checks:
+                mem_checks.clear()
+
             # generate test and update files
-            test, progmem = generate_test(test_no, vect, './' + RUNSIM_FILE)
+            test, progmem = generate_test(test_no, vect, mem_checks,
+                                          './' + RUNSIM_FILE)
             testcase_out.writelines(test)
             progmem_out.writelines(progmem)
 
