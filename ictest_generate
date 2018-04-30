@@ -477,8 +477,11 @@ if __name__ == '__main__':
 
     mem_checks = MemCheck.parse(m.group(5))
 
-    m = re.match('([0-9a-fA-F]{2})h', m.group(6))
-    flagignore = int(m.group(1), 16) if m else 0x00
+    if m.group(6):
+        mfignore = re.match('([0-9a-fA-F]{2})h', m.group(6))
+        flagignore = int(mfignore.group(1), 16)
+    else:
+        flagignore = 0x00
 
     # state vector cycle positions
     cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
