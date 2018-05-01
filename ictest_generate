@@ -8,6 +8,27 @@ import subprocess
 import sys
 import uuid
 
+# external programs
+ASM = 'z80asm'
+RUNSIM = 'ictest_runsim'
+
+# limits
+MAXTESTS = 2048
+PROGMEM_SIZE = 8192
+DATAMEM_SIZE = 8192
+
+# output files
+ZEX_FILE = 'zex.txt'
+TESTCASE_FILE = 'testcase.v'
+PROGMEM_FILE = 'progmem.txt'
+DATAMEM_FILE = 'datamem.txt'
+
+# temporary files
+ASM_FILE = 'progmem.asm'
+PROGMEM_BIN_FILE = 'progmem.bin'
+DATAMEM_BIN_FILE = 'datamem.bin'
+
+
 class StateVector:
     STATE_WIDTHS = {
         "INST1" : 8,
@@ -118,7 +139,7 @@ class MemCheck:
         self.expected = []
 
 
-def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
+def generate_test(test_no, state_vector, flagignore, mem_checks):
     ASM_STATE_FMT = {
         "A"    : " LD A,{0:03X}H\n",
         "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
@@ -254,8 +275,8 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
     init_asm.append(' HALT')
 
     # create reference simulation output
-    asm_tmp = open('tmp.asm', 'w+')
-    bin_tmp = open('tmp.bin', 'w+')
+    asm_tmp = open(ASM_FILE, 'w+')
+    bin_tmp = open(PROGMEM_BIN_FILE, 'w+')
     devnull = open(os.devnull, 'w')
 
     try:
@@ -263,7 +284,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
         asm_tmp.writelines(init_asm)
         asm_tmp.close()
 
-        z80asm = subprocess.Popen(['z80asm', asm_tmp.name], stdout=devnull)
+        z80asm = subprocess.Popen([ASM, ASM_FILE], stdout=devnull)
         z80asm.wait()
 
         # inject instruction bytes
@@ -277,7 +298,8 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
         bin_tmp.write(b''.join(instructions))
         bin_tmp.close()
 
-        args = [runsim, bin_tmp.name, init_flags, init_flags_p]
+        args = [RUNSIM, PROGMEM_BIN_FILE, DATAMEM_BIN_FILE, str(DATAMEM_SIZE),
+                init_flags, init_flags_p]
 
         if mem_checks:
             for state in mem_checks.states:
@@ -304,8 +326,8 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
         bin_tmp.close()
         devnull.close()
 
-        os.remove(asm_tmp.name)
-        os.remove(bin_tmp.name)
+        os.remove(ASM_FILE)
+        os.remove(PROGMEM_BIN_FILE)
 
     # parse simulation results
     simout = z80sim.stdout.read()
@@ -433,18 +455,6 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
 
 
 if __name__ == '__main__':
-    MAXTESTS = 2048
-
-    PROGMEM_SIZE = 8192
-    DATAMEM_SIZE = 8192
-
-    ZEX_FILE = 'zex.txt'
-    TESTCASE_FILE = 'testcase.v'
-    PROGMEM_FILE = 'progmem.txt'
-    DATAMEM_FILE = 'datamem.txt'
-    DATAMEM_BIN_FILE = 'datamem.bin'
-    RUNSIM_FILE = 'runsim.exp'
-
     # read test description
     with open(ZEX_FILE) as infile:
         zex = infile.read()
@@ -503,9 +513,6 @@ if __name__ == '__main__':
     progmem_out = open(PROGMEM_FILE, 'w+')
     datamem_out = open(DATAMEM_FILE, 'w+')
     datamem_bin_out = open(DATAMEM_BIN_FILE, 'w+')
-    runsim_out = open(RUNSIM_FILE, 'w+')
-
-    os.chmod(RUNSIM_FILE, 500)
 
     # create random data memory
     datamem = []
@@ -519,48 +526,6 @@ if __name__ == '__main__':
     datamem_bin = bytes(bytearray(datamem_bin))
 
     try:
-        # create z80 simulator expect file
-        runsim_out.writelines([
-            '#!/usr/bin/expect -f\n',
-            '\n',
-            'set prog_bin  [lindex $argv 0];\n',
-            'set setflags  [lindex $argv 1];\n',
-            'set setflagsp [lindex $argv 2];\n',
-            '\n',
-            'if { $::argc > 3 } {\n',
-            '    set mem_checks [lrange $argv 3 end];\n',
-            '}\n',
-            '\n',
-            'spawn z80sim\n',
-            'expect ">>>"\n',
-            'send "x f\\r"\n',
-            'expect "F = "\n',
-            'send "$setflags\\r"\n',
-            'expect ">>>"\n',
-            'send "x f\'\\r"\n',
-            'expect "F\' = "\n',
-            'send "$setflagsp\\r"\n',
-            'expect ">>>"\n',
-            'send "r $prog_bin,0\\r"\n',
-            'expect ">>>"\n',
-            'send "v 0,{0},{1}\r"\n'.format(DATAMEM_SIZE, PROGMEM_SIZE),
-            'expect ">>>"\n',
-            'send "r {0},0\\r"\n'.format(DATAMEM_BIN_FILE),
-            'expect ">>>"\n',
-            'send "g {0}\\r"\n'.format(DATAMEM_SIZE),
-            'expect ">>>"\n',
-            '\n',
-            'if {[info exists mem_checks]} {\n',
-            '    foreach mem_check $::mem_checks {\n',
-            '        send "d $mem_check\\r"\n',
-            '        expect ">>>"\n',
-            '    }\n',
-            '}\n',
-            '\n',
-            'send "quit\\r"'
-        ])
-        runsim_out.close()
-
         # fill data memory
         datamem_out.writelines(datamem)
         datamem_out.close()
@@ -595,8 +560,9 @@ if __name__ == '__main__':
                     mem_checks.clear()
 
                 # generate test and update files
-                test, progmem = generate_test(test_no, vect, flagignore,
-                                              mem_checks, './' + RUNSIM_FILE)
+                test, progmem = generate_test(
+                    test_no, vect, flagignore, mem_checks)
+
                 testcase_out.writelines(test)
                 progmem_out.writelines(progmem)
 
@@ -609,7 +575,5 @@ if __name__ == '__main__':
         progmem_out.close()
         datamem_out.close()
         datamem_bin_out.close()
-        runsim_out.close()
 
-        os.remove(RUNSIM_FILE)
         os.remove(DATAMEM_BIN_FILE)
