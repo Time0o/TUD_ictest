@@ -576,7 +576,7 @@ if __name__ == '__main__':
                 test_no = cycle_no * (repeat + 1) + repeat_no
 
                 # display progress
-                fmt = "\rgenerating test {0}/{1}"
+                fmt = "\rGenerating test {0}/{1}"
                 sys.stdout.write(fmt.format(test_no + 1,
                                             len(cycles) * (repeat + 1)))
                 sys.stdout.flush()

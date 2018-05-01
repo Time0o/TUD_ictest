@@ -30,10 +30,19 @@ if [ "$#" -le 1 ]; then
     fi
 fi
 
+expandbase()
+{
+    abspath="$(readlink -f "$1")"
+    echo "$(basename "$abspath")"
+}
+
 case $1 in
 "generate")
     for testdir in "${@:2}"
     do
+        testname="$(expandbase "$testdir")"
+
+        echo "Generating testcase $testname ..."
         (cd "$testdir"; ictest_generate)
     done
     ;;
@@ -41,8 +50,6 @@ case $1 in
 "run")
     for testdir in "${@:2}"
     do
-        testdir=${testdir%/}
-
         if [ ! -d "$testdir" ]; then
             echo "Not a directory: '$testdir'" 1>&2
             usage
@@ -51,9 +58,9 @@ case $1 in
 
     for testdir in "${@:2}"
     do
-        testdir=${testdir%/}
+        testname="$(expandbase "$testdir")"
 
-        printf "\n=== Executing testcase $testdir ===\n"
+        printf "\n=== Executing testcase $testname ===\n"
         if [ ! -f "$testdir/testcase.v" ]; then
             warn "No testcase source file found, skipping testcase"
             continue
