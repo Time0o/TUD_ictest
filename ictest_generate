@@ -179,7 +179,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p",
         "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
         "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
-        "SP"   : "z80_i.cpu_i.datapath_i.sp",
+        "SP"   : "z80_i.cpu_i.datapath_i.reg_sp_i.q",
         "PMEM" : "z80_i.memory_control_i.progmem_mock_i.progmem",
         "DMEM" : "z80_i.memory_control_i.datamem_mock_i.datamem",
         "DMEM_SWP" : "z80_i.memory_control_i.datamem_mock_i.datamem_swp"
