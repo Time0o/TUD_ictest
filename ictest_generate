@@ -26,7 +26,8 @@ class StateVector:
         "H'L'"  : 16,
         "IX"    : 16,
         "IY"    : 16,
-        "SP"    : 16
+        "SP"    : 16,
+        "DUMMY" : 8
     }
 
     def __init__(self, states, bitvector):
@@ -387,7 +388,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks, runsim):
 
     # add register assertions to testbench code
     for state in state_vector.states:
-        if state in ['INST1', 'INST2', 'INST3', 'INST4', 'F', "F'"]:
+        if state in ['INST1', 'INST2', 'INST3', 'INST4', 'F', "F'", "DUMMY"]:
             continue
 
         fmt = VUNIT_EXPECT_FMT[state]
@@ -461,6 +462,7 @@ if __name__ == '__main__':
     desc:\s+(.*)\s+
     base:\s+(.*)\s+
     cycle:\s+(.*)
+    (?:\s+repeat:\s+(\d+))?
     (?:\s+memcheck:\s+(.*))?
     (?:\s+flagignore:\s+(.*))?
     $
@@ -475,10 +477,15 @@ if __name__ == '__main__':
     base = StateVector.parse(m.group(3))
     cycle = StateVector.parse(m.group(4))
 
-    mem_checks = MemCheck.parse(m.group(5))
+    if m.group(5):
+        repeat = int(m.group(5))
+    else:
+        repeat = 0
 
-    if m.group(6):
-        mfignore = re.match('([0-9a-fA-F]{2})h', m.group(6))
+    mem_checks = MemCheck.parse(m.group(6))
+
+    if m.group(7):
+        mfignore = re.match('([0-9a-fA-F]{2})h', m.group(7))
         flagignore = int(mfignore.group(1), 16)
     else:
         flagignore = 0x00
@@ -564,30 +571,34 @@ if __name__ == '__main__':
         # begin creating testcase file
         testcase_out.write('unit.start("{0} ({1})");\n\n'.format(name, desc))
 
-        for test_no, cycle in enumerate(cycles):
-            # display progress
-            fmt = "\rgenerating test {0}/{1}"
-            sys.stdout.write(fmt.format(test_no + 1, len(cycles)))
-            sys.stdout.flush()
+        for cycle_no, cycle in enumerate(cycles):
+            for repeat_no in range(repeat + 1):
+                test_no = cycle_no * (repeat + 1) + repeat_no
 
-            # create state vector variant
-            vect = base.copy()
+                # display progress
+                fmt = "\rgenerating test {0}/{1}"
+                sys.stdout.write(fmt.format(test_no + 1,
+                                            len(cycles) * (repeat + 1)))
+                sys.stdout.flush()
 
-            if cycle > 0:
-                setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
-                for i, b in enumerate(setbits):
-                    vect.bitvector[cycle_pos[i - 1]] = int(b)
+                # create state vector variant
+                vect = base.copy()
 
-            vect.randomize()
+                if cycle > 0:
+                    setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
+                    for i, b in enumerate(setbits):
+                        vect.bitvector[cycle_pos[i - 1]] = int(b)
 
-            if mem_checks:
-                mem_checks.clear()
+                vect.randomize()
 
-            # generate test and update files
-            test, progmem = generate_test(test_no, vect, flagignore, mem_checks,
-                                          './' + RUNSIM_FILE)
-            testcase_out.writelines(test)
-            progmem_out.writelines(progmem)
+                if mem_checks:
+                    mem_checks.clear()
+
+                # generate test and update files
+                test, progmem = generate_test(test_no, vect, flagignore,
+                                              mem_checks, './' + RUNSIM_FILE)
+                testcase_out.writelines(test)
+                progmem_out.writelines(progmem)
 
         testcase_out.write('unit.finish("{0} ({1})");\n'.format(name, desc))
 
