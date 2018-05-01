@@ -1,34 +1,76 @@
 #!/bin/bash
 
+usage_msg="Usage: ictest [generate|run] TESTDIRS"
+
+showhelp() {
+cat << EOF
+$usage_msg
+
+generate TESTDIRS : generate testcases from zex.txt files for given directories
+run TESTDIRS : run generated tests in given directories and report results
+EOF
+
+   exit 0
+}
+
 usage() {
-    echo "Usage: ictest [generate|run]" 1>&2
+    echo "$usage_msg" 1>&2
     exit 1
 }
 
-if [[ "$#" -ne 1 ]]; then
-    usage
+warn() {
+    echo "WARNING: $1" 1>&2
+}
+
+if [ "$#" -le 1 ]; then
+    if [ "$1" = "--help" ]; then
+        showhelp
+    else
+        usage
+    fi
 fi
 
 case $1 in
 "generate")
-    ictest_generate
+    for testdir in "${@:2}"
+    do
+        (cd "$testdir"; ictest_generate)
+    done
     ;;
 
 "run")
-    if [ ! -f testcase.v ]; then
-        echo "No testcase source file found" 1>&2
-        exit 1
-    fi
+    for testdir in "${@:2}"
+    do
+        testdir=${testdir%/}
 
-    echo "Generating makefile..."
-    icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR
-    if [ $? -eq 0 ]; then
-        echo "Makefile generation failed, check logfile" 1>&2
-        exit 2
-    fi
+        if [ ! -d "$testdir" ]; then
+            echo "Not a directory: '$testdir'" 1>&2
+            usage
+        fi
+    done
 
-    echo "Running simulation..."
-    icncsim runBatch 2>&1 | ictest_parse_ncsim
+    for testdir in "${@:2}"
+    do
+        testdir=${testdir%/}
+
+        printf "\n=== Executing testcase $testdir ===\n"
+        if [ ! -f "$testdir/testcase.v" ]; then
+            warn "No testcase source file found, skipping testcase"
+            continue
+        fi
+
+        echo "Generating makefile"
+        (cd "$testdir"; icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR)
+        if [ $? -eq 0 ]; then
+            warn "Makefile generation failed, check logfile"
+           continue
+        fi
+
+        echo "Running simulation"
+        (cd "$testdir"; icncsim runBatch 2>&1 | ictest_parse_ncsim)
+    done
+
+    echo ""
     ;;
 
 *)
