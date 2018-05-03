@@ -682,10 +682,9 @@ if __name__ == '__main__':
                 # create state vector variant
                 vect = options['base'].copy()
 
-                if cycle > 0:
-                    setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
-                    for i, b in enumerate(setbits):
-                        vect.bitvector[cycle_pos[i - 1]] = int(b)
+                setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
+                for i, b in enumerate(setbits):
+                    vect.bitvector[cycle_pos[i]] = int(b)
 
                 vect.randomize()
 
