@@ -1,13 +1,15 @@
 #!/usr/bin/expect -f
 
-set prog_bin    [lindex $argv 0];
-set dmem_bin    [lindex $argv 1];
-set dmem_sz     [lindex $argv 2];
-set set_flags   [lindex $argv 3];
-set set_flags_p [lindex $argv 4];
+set pmem_bin    [lindex $argv 0];
+set pmem_sz     [lindex $argv 1];
+set dmem_bin    [lindex $argv 2];
+set dmem_sz     [lindex $argv 3];
+set set_flags   [lindex $argv 4];
+set set_flags_p [lindex $argv 5];
+set set_brk     [lindex $argv 6];
 
-if { $::argc > 5 } {
-    set mem_checks [lrange $argv 5 end];
+if { $::argc > 7 } {
+    set mem_checks [lrange $argv 7 end];
 }
 
 spawn z80sim
@@ -20,9 +22,11 @@ send "x f'\r"
 expect "F' = "
 send "$set_flags_p\r"
 expect ">>>"
-send "r $prog_bin,$dmem_sz\r"
+send "r $pmem_bin,$dmem_sz\r"
 expect ">>>"
 send "r $dmem_bin,0\r"
+expect ">>>"
+send "b $set_brk\r"
 expect ">>>"
 send "g $dmem_sz\r"
 expect ">>>"

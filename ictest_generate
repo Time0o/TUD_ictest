@@ -50,6 +50,7 @@ STATE_WIDTHS = {
     "DUMMY" : 8
 }
 
+
 def parse_word(word, state):
     m = re.match('^([0-9a-fA-FxX]+)(b|h)$', word)
     if not m:
@@ -74,6 +75,7 @@ def parse_word(word, state):
                 ret += [int(b) for b in '{0:04b}'.format(int(digit, 16))]
 
         return ret
+
 
 class StateVector:
     def __init__(self, states, bitvector):
@@ -334,8 +336,6 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
 
         offs += width
 
-    init_asm.append(' HALT')
-
     # create reference simulation output
     asm_tmp = open(ASM_FILE, 'w+')
     bin_tmp = open(PROGMEM_BIN_FILE, 'w+')
@@ -354,14 +354,25 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         instructions = [data[i:i+1] for i in range(len(data))]
 
         for op in test_ops:
-            instructions.insert(-1, op)
+            instructions.append(op)
 
         bin_tmp.seek(0)
         bin_tmp.write(b''.join(instructions))
         bin_tmp.close()
 
-        args = [RUNSIM, PROGMEM_BIN_FILE, DATAMEM_BIN_FILE, str(DATAMEM_SIZE),
-                init_flags, init_flags_p]
+        # get breakpoint
+        brk = DATAMEM_SIZE + len(instructions) - len(test_ops) - 3
+
+        args = [
+            RUNSIM,
+            PROGMEM_BIN_FILE,
+            '{0:04X}'.format(PROGMEM_SIZE),
+            DATAMEM_BIN_FILE,
+            '{0:04X}'.format(DATAMEM_SIZE),
+            init_flags,
+            init_flags_p,
+            '{0:04X}'.format(brk)
+        ]
 
         if mem_checks:
             for state in mem_checks.states:
@@ -394,7 +405,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
     # parse simulation results
     simout = z80sim.stdout.read()
 
-    m = re.search(r'HALT.*\s+(.*)\n(.*)\n>>>', simout)
+    m = re.search(r'Software breakpoint.*\s+(.*)\n(.*)\n>>>', simout)
     if not m:
         err = "an error occured during simulation, check for illegal opcodes"
         raise ValueError(err)
