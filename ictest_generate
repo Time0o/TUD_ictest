@@ -663,15 +663,18 @@ if __name__ == '__main__':
         testcase_out.write('unit.start("{0} ({1})");\n\n'.format(
             options['name'], options['desc']))
 
-        iterations = options['repeat'] + 1
-        for cycle_no, cycle in enumerate(cycles):
-            for repeat_no in range(iterations):
-                test_no = cycle_no * iterations + repeat_no
+        repetitions = options['repeat'] + 1
+        tests_total = len(cycles) * repetitions
 
+        test_no = 0
+        for cycle in cycles:
+            for _ in range(repetitions):
                 # display progress
-                progress = "\rGenerating test {0}/{1}".format(
-                    test_no + 1, len(cycles) * (iterations))
-
+                if options['skip']:
+                    progress = "\rGenerating test {0}".format(test_no + 1)
+                else:
+                    progress = "\rGenerating test {0}/{1}".format(test_no + 1,
+                                                                  tests_total)
                 sys.stdout.write(progress)
                 sys.stdout.flush()
 
@@ -698,6 +701,8 @@ if __name__ == '__main__':
 
                 testcase_out.writelines(test)
                 progmem_out.writelines(progmem)
+
+                test_no += 1
 
         testcase_out.write('unit.finish("{0} ({1})");\n'.format(
             options['name'], options['desc']))
