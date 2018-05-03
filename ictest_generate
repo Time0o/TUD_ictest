@@ -180,7 +180,6 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
         "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
         "SP"   : "z80_i.cpu_i.datapath_i.reg_sp_i.q",
-        "PMEM" : "z80_i.memory_control_i.progmem_mock_i.progmem",
         "DMEM" : "z80_i.memory_control_i.datamem_mock_i.datamem",
         "DMEM_SWP" : "z80_i.memory_control_i.datamem_mock_i.datamem_swp"
     }
@@ -225,7 +224,6 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "IX"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IX ({2})\");\n",
         "IY"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IY ({2})\");\n",
         "SP"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"SP ({2})\");\n",
-        "PMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"PMEM ({3})\");\n",
         "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"DMEM ({3})\");\n",
         "DMEM_SWP" : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
     }
