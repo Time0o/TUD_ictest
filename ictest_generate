@@ -50,6 +50,9 @@ STATE_WIDTHS = {
     "DUMMY" : 8
 }
 
+# program counter reset after voluntary jump
+current_pc = 0
+
 def parse_word(word, state):
     m = re.match('^([0-9a-fA-FxX]+)(b|h)$', word)
     if not m:
@@ -206,7 +209,7 @@ class MemCheck:
         self.expected = []
 
 
-def generate_test(test_no, state_vector, flagignore, mem_checks):
+def generate_test(test_no, state_vector, options):
     ASM_STATE_FMT = {
         "A"    : " LD A,{0:03X}H\n",
         "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
@@ -247,6 +250,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
         "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
         "SP"   : "z80_i.cpu_i.datapath_i.reg_sp_i.q",
+        "PC"   : "z80_i.cpu_i.datapath_i.reg_pc_i.q",
         "DMEM" : "z80_i.memory_control_i.datamem_mock_i.datamem",
         "SWP"  : "z80_i.memory_control_i.datamem_mock_i.datamem_swp"
     }
@@ -264,6 +268,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "H'L'" : "{0} = 16'h{1:04X};\n",
         "IX"   : "{0} = 16'h{1:04X};\n",
         "IY"   : "{0} = 16'h{1:04X};\n",
+        "PC"   : "{0} = 16'h{1:04X};\n",
         "SP"   : "{0} = 16'h{1:04X};\n"
     }
 
@@ -291,11 +296,18 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
         "IX"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IX ({2})\");\n",
         "IY"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IY ({2})\");\n",
         "SP"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"SP ({2})\");\n",
+        "PC"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"PC ({2})\");\n",
         "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"DMEM ({3})\");\n",
         "SWP"  : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
     }
 
     VUNIT_FLAG_ORDER = ['S', 'Z', 'H', 'PV', 'N', 'C']
+
+    global current_pc
+
+    flagignore = options['flagignore']
+    memcheck = options['memcheck']
+    pccheck = options['pccheck']
 
     # z80sim input
     init_asm = ['START:\n']
@@ -332,8 +344,8 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
             else:
                 init_asm.append(ASM_STATE_FMT[state].format(binvalue))
 
-        if mem_checks and state in mem_checks.pre:
-            mem_checks.pre[state] = binvalue
+        if memcheck and state in memcheck.pre:
+            memcheck.pre[state] = binvalue
 
         offs += width
 
@@ -375,22 +387,22 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
             '{0:04X}'.format(brk)
         ]
 
-        if mem_checks:
-            for state in mem_checks.states:
+        if memcheck:
+            for state in memcheck.states:
                 components = MemCheck.MNEMONICS[state]
                 operator, operands = components[0], components[1:]
 
                 if operator == 'id':
-                    addr = mem_checks.pre[operands[0]]
+                    addr = memcheck.pre[operands[0]]
                 elif operator == '+':
-                    addr = sum([mem_checks.pre[op] for op in operands])
+                    addr = sum([memcheck.pre[op] for op in operands])
                 else:
                     err = "unrecognized memcheck operator: {0}"
                     raise ValueError(err.format(operator))
 
-                mem_checks.addrs.append(addr)
+                memcheck.addrs.append(addr)
 
-            args += ['{0:04x}'.format(a) for a in mem_checks.addrs]
+            args += ['{0:04x}'.format(a) for a in memcheck.addrs]
 
         z80sim = subprocess.Popen(args, stdout=subprocess.PIPE)
         z80sim.wait()
@@ -418,6 +430,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
 
     reg_expected = {}
     flag_expected = {}
+    pc_expected = None
     for r, v in zip(regs, values):
         if r == 'SZHPNC':
             flags = [int(b, 2) for b in v]
@@ -451,12 +464,22 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
             if not flagignore & 0x01:
                 flag_expected["C'"] = flags[7]
 
+        elif r == 'PC' and pccheck != 'none':
+            pc_expected = int(v, 16)
+
+            if pc_expected == DATAMEM_SIZE + len(test_ops):
+                pc_expected = current_pc + len(test_ops)
+            elif pccheck == 'rel':
+                pc_expected = (pc_expected - DATAMEM_SIZE + current_pc) % (2**16)
+
+            current_pc += len(test_ops)
+
         elif r in state_vector.states:
             reg_expected[r] = int(v, 16)
 
     # optain expected memory locations
-    if mem_checks:
-        for addr in mem_checks.addrs:
+    if memcheck:
+        for addr in memcheck.addrs:
             addr_hex = '{0:04X}'.format(addr)
             addr_lsn = int(addr_hex[3], 16)
 
@@ -464,7 +487,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
             m = re.search(r'Adr.*\n[0-9a-f]{4} - (.*)\t', simout)
 
             mem_row = [int(val, 16) for val in m.group(1).split()]
-            mem_checks.expected.append(mem_row[addr_lsn])
+            memcheck.expected.append(mem_row[addr_lsn])
 
     # add timeout loop to testbench code
     waitloop = [
@@ -503,25 +526,34 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
 
         test.append(expect)
 
-    test.append('\n')
-
     # add memory assertions to testbench code
-    if mem_checks:
-        for addr, exp in zip(mem_checks.addrs, mem_checks.expected):
+    if memcheck:
+        test.append('\n')
+
+        for addr, exp in zip(memcheck.addrs, memcheck.expected):
             fmt = VUNIT_EXPECT_FMT['DMEM']
             msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
             expect = fmt.format(exp, VUNIT_ELEMS['DMEM'], addr, msg)
 
             test.append(expect)
 
-        test.append('\n')
-
-        for addr in mem_checks.addrs:
+        for addr in memcheck.addrs:
             fmt = VUNIT_EXPECT_FMT['SWP']
             swp = fmt.format(VUNIT_ELEMS['DMEM'], addr,
                              VUNIT_ELEMS['SWP'], addr)
 
             test.append(swp)
+
+    # add program counter assertion to testbench code
+    if pccheck != 'none':
+        test.append('\n')
+
+        fmt = VUNIT_EXPECT_FMT['PC']
+        msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
+        test.append(fmt.format(pc_expected, VUNIT_ELEMS['PC'], msg))
+
+        fmt = VUNIT_STATE_FMT['PC']
+        test.append(fmt.format(VUNIT_ELEMS['PC'], current_pc))
 
     test.append('\n')
 
@@ -547,6 +579,7 @@ if __name__ == '__main__':
         'skip' : None,
         'repeat' : 0,
         'memcheck' : None,
+        'pccheck' : 'none',
         'flagignore' : 0x00
     }
 
@@ -569,12 +602,19 @@ if __name__ == '__main__':
 
             return int(m.group(1), 16)
 
+        def parse_pccheck(fmt):
+            if fmt not in ['none', 'abs', 'rel']:
+                raise ValueError("invalid pccheck value")
+
+            return fmt
+
         parse = {
             'base'       : StateVector.parse,
             'cycle'      : StateVector.parse,
             'skip'       : SkipVector.parse,
             'repeat'     : int,
             'memcheck'   : MemCheck.parse,
+            'pccheck'    : parse_pccheck,
             'flagignore' : parse_flagignore
         }.get(option, str)
 
@@ -654,8 +694,7 @@ if __name__ == '__main__':
                     options['memcheck'].clear()
 
                 # generate test and update files
-                test, progmem = generate_test(
-                    test_no, vect, options['flagignore'], options['memcheck'])
+                test, progmem = generate_test(test_no, vect, options)
 
                 testcase_out.writelines(test)
                 progmem_out.writelines(progmem)
