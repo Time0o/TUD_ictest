@@ -50,7 +50,6 @@ STATE_WIDTHS = {
     "DUMMY" : 8
 }
 
-
 def parse_word(word, state):
     m = re.match('^([0-9a-fA-FxX]+)(b|h)$', word)
     if not m:
@@ -75,7 +74,6 @@ def parse_word(word, state):
                 ret += [int(b) for b in '{0:04b}'.format(int(digit, 16))]
 
         return ret
-
 
 class StateVector:
     def __init__(self, states, bitvector):
@@ -145,6 +143,9 @@ class SkipVector:
     def check(self, vect):
         offs = 0
         for state in vect.states:
+            if state not in self.stateignore:
+                continue
+
             width = STATE_WIDTHS[state]
             value = vect.bitvector[offs:(offs + width)]
 
@@ -561,13 +562,20 @@ if __name__ == '__main__':
         if option in seen_options:
             raise ValueError("duplicate option: '{0}'".format(option))
 
+        def parse_flagignore(fmt):
+            m = re.match('([0-9a-fA-F]{2})h', fmt)
+            if not m:
+                print("invalid flagignore mask: '{0}'".format(fmt))
+
+            return int(m.group(1), 16)
+
         parse = {
             'base'       : StateVector.parse,
             'cycle'      : StateVector.parse,
             'skip'       : SkipVector.parse,
             'repeat'     : int,
             'memcheck'   : MemCheck.parse,
-            'flagignore' : (lambda x : int(re.match('([0-9a-fA-F]{2})h', x), 16))
+            'flagignore' : parse_flagignore
         }.get(option, str)
 
         options[option] = parse(value)
