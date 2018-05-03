@@ -28,6 +28,8 @@ send "r $dmem_bin,0\r"
 expect ">>>"
 send "b $set_brk\r"
 expect ">>>"
+send "l $dmem_sz\r"
+expect ">>>"
 send "g $dmem_sz\r"
 expect ">>>"
 
