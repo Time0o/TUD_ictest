@@ -565,7 +565,7 @@ if __name__ == '__main__':
         def parse_flagignore(fmt):
             m = re.match('([0-9a-fA-F]{2})h', fmt)
             if not m:
-                print("invalid flagignore mask: '{0}'".format(fmt))
+                raise ValueError("invalid flagignore mask: '{0}'".format(fmt))
 
             return int(m.group(1), 16)
 
