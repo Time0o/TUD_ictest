@@ -297,7 +297,8 @@ def generate_test(test_no, state_vector, options):
         "IY"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IY ({2})\");\n",
         "SP"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"SP ({2})\");\n",
         "PC"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"PC ({2})\");\n",
-        "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n\"DMEM ({3})\");\n",
+        "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n"
+                 "\"DMEM ({3})\");\n",
         "SWP"  : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
     }
 
