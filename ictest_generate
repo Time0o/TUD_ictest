@@ -146,10 +146,12 @@ class SkipVector:
     def check(self, vect):
         offs = 0
         for state in vect.states:
+            width = STATE_WIDTHS[state]
+
             if state not in self.stateignore:
+                offs += width
                 continue
 
-            width = STATE_WIDTHS[state]
             value = vect.bitvector[offs:(offs + width)]
 
             for ignore in self.stateignore[state]:
