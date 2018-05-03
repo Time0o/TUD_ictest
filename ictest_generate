@@ -28,29 +28,54 @@ ASM_FILE = 'progmem.asm'
 PROGMEM_BIN_FILE = 'progmem.bin'
 DATAMEM_BIN_FILE = 'datamem.bin'
 
+# bit widths
+STATE_WIDTHS = {
+    "INST1" : 8,
+    "INST2" : 8,
+    "INST3" : 8,
+    "INST4" : 8,
+    "A"     : 8,
+    "A'"    : 8,
+    "F"     : 8,
+    "F'"    : 8,
+    "BC"    : 16,
+    "B'C'"  : 16,
+    "DE"    : 16,
+    "D'E'"  : 16,
+    "HL"    : 16,
+    "H'L'"  : 16,
+    "IX"    : 16,
+    "IY"    : 16,
+    "SP"    : 16,
+    "DUMMY" : 8
+}
+
+def parse_word(word, state):
+    m = re.match('^([0-9a-fA-FxX]+)(b|h)$', word)
+    if not m:
+        raise ValueError("malformed word: {0}".format(word))
+
+    value, base = m.groups()
+
+    width = len(value) if base == 'b' else (len(value) * 4)
+    if width != STATE_WIDTHS[state]:
+        err = "state '{0}' has wrong bit width".format(state)
+        raise ValueError(err)
+
+    if base == 'b':
+        return [int(digit, 2) if digit != 'x' else 'x'
+                for digit in value]
+    else:
+        ret = []
+        for digit in value:
+            if digit == 'x':
+                ret += ['x', 'x', 'x', 'x']
+            else:
+                ret += [int(b) for b in '{0:04b}'.format(int(digit, 16))]
+
+        return ret
 
 class StateVector:
-    STATE_WIDTHS = {
-        "INST1" : 8,
-        "INST2" : 8,
-        "INST3" : 8,
-        "INST4" : 8,
-        "A"     : 8,
-        "A'"    : 8,
-        "F"     : 8,
-        "F'"    : 8,
-        "BC"    : 16,
-        "B'C'"  : 16,
-        "DE"    : 16,
-        "D'E'"  : 16,
-        "HL"    : 16,
-        "H'L'"  : 16,
-        "IX"    : 16,
-        "IY"    : 16,
-        "SP"    : 16,
-        "DUMMY" : 8
-    }
-
     def __init__(self, states, bitvector):
         self.states = states
         self.bitvector = bitvector
@@ -60,31 +85,19 @@ class StateVector:
         states = []
         bitvector = []
 
-        for word in fmt.split(','):
-            m = re.match('^([\w\']+):([0-9a-fA-FxX]+)(b|h)$', word.strip())
+        for word in [w.strip() for w in fmt.split(',')]:
+            m = re.match('^([\w\']+):([0-9a-fA-FxX]+(?:b|h))$', word)
             if not m:
                 err = "malformed state vector element: {0}".format(word)
                 raise ValueError(err)
 
-            state, value, base = m.groups()
-
-            width = len(value) if base == 'b' else (len(value) * 4)
-            if width != StateVector.STATE_WIDTHS[state]:
-                err = "state '{0}' has wrong bit width".format(state)
-                raise ValueError(err)
+            state, word = m.groups()
+            if state not in STATE_WIDTHS:
+               err = "unknown state in state vector: '{0}'".format(state)
+               raise ValueError(err)
 
             states.append(state)
-
-            if base == 'b':
-                bitvector += [int(digit, 2) if digit != 'x' else 'x'
-                              for digit in value]
-            else:
-                for digit in value:
-                    if digit == 'x':
-                        bitvector += ['x', 'x', 'x', 'x']
-                    else:
-                        nibble = '{0:04b}'.format(int(digit, 16))
-                        bitvector += [int(b) for b in nibble]
+            bitvector += parse_word(word, state)
 
         return cls(states, bitvector)
 
@@ -94,6 +107,60 @@ class StateVector:
     def randomize(self):
         self.bitvector = [
             b if b != 'x' else random.randint(0, 1) for b in self.bitvector]
+
+
+class SkipVector:
+    def __init__(self, stateignore):
+        self.stateignore = stateignore
+
+    @classmethod
+    def parse(cls, fmt):
+        stateignore = {}
+
+        for word in [w.strip() for w in fmt.split(',')]:
+            word_fmt = '[0-9a-fA-FxX]+(?:b|h)'
+
+            m = re.match('^(\w+):{{({0}(?:;{0})*)}}$'.format(word_fmt), word)
+            if not m:
+                 err = "malformed skip vector element: {0}".format(word)
+                 raise ValueError(err)
+
+            state, ignore = m.groups()
+            if state not in STATE_WIDTHS:
+                err = "unknown state in skip vector: '{0}'".format(state)
+                raise ValueError(err)
+
+            if state in stateignore:
+                err = "duplicate state in skip vector: '{0}'".format(state)
+                raise ValueError(err)
+
+            stateignore[state] = []
+            for word in [i.strip() for i in ignore.split(';')]:
+                stateignore[state].append(parse_word(word, state))
+
+        return SkipVector(stateignore)
+
+    def check(self, vect):
+        offs = 0
+        for state in vect.states:
+            width = STATE_WIDTHS[state]
+            value = vect.bitvector[offs:(offs + width)]
+
+            for ignore in self.stateignore[state]:
+                skip = True
+                for v, i in zip(value, ignore):
+                    if i == 'x':
+                        continue
+
+                    if v != i:
+                        skip = False
+                        break
+                if skip:
+                    return True
+
+            offs += width
+
+        return False
 
 
 class MemCheck:
@@ -114,9 +181,6 @@ class MemCheck:
 
     @classmethod
     def parse(cls, fmt):
-        if not fmt:
-            return None
-
         states = []
         pre = {}
         for mnemonic in [m.strip() for m in fmt.split(',')]:
@@ -248,7 +312,7 @@ def generate_test(test_no, state_vector, flagignore, mem_checks):
 
     offs = 0
     for state in state_vector.states:
-        width = StateVector.STATE_WIDTHS[state]
+        width = STATE_WIDTHS[state]
         binstr = ''.join(map(str, state_vector.bitvector[offs:(offs + width)]))
         binvalue = int(binstr, 2)
 
@@ -460,48 +524,53 @@ if __name__ == '__main__':
         zex = infile.read()
 
     # strip comments and trailing whitespace
-    zex = re.sub(r'(?m)\s*(;.*)?$', '', zex)
+    zex = re.sub(r'(?m)\s*(#.*)?$', '', zex)
 
     # remove empty lines
     zex = '\n'.join([line for line in zex.split('\n') if line])
 
-    # parse components
-    pattern = r'''
-    ^
-    name:\s+(.*)\s+
-    desc:\s+(.*)\s+
-    base:\s+(.*)\s+
-    cycle:\s+(.*)
-    (?:\s+repeat:\s+(\d+))?
-    (?:\s+memcheck:\s+(.*))?
-    (?:\s+flagignore:\s+(.*))?
-    $
-    '''
+    options = {
+        'name' : None,
+        'desc' : None,
+        'base' : None,
+        'cycle' : None,
+        'skip' : None,
+        'repeat' : 0,
+        'memcheck' : None,
+        'flagignore' : 0x00
+    }
 
-    m = re.match(pattern, zex, re.VERBOSE)
-    if not m:
-        raise ValueError("malformatted test description file")
+    seen_options = set()
+    for i, line in enumerate(zex.split('\n')):
+        m = re.match('^(\w+):\s*(.*)$', line)
+        if not m:
+            raise ValueError("syntax error in line {0} of zex file".format(i))
 
-    name = m.group(1)
-    desc = m.group(2)
-    base = StateVector.parse(m.group(3))
-    cycle = StateVector.parse(m.group(4))
+        option, value = m.groups()
+        if option not in options:
+            raise ValueError("unknown option: '{0}'".format(option))
+        if option in seen_options:
+            raise ValueError("duplicate option: '{0}'".format(option))
 
-    if m.group(5):
-        repeat = int(m.group(5))
-    else:
-        repeat = 0
+        parse = {
+            'base'       : StateVector.parse,
+            'cycle'      : StateVector.parse,
+            'skip'       : SkipVector.parse,
+            'repeat'     : int,
+            'memcheck'   : MemCheck.parse,
+            'flagignore' : (lambda x : int(re.match('([0-9a-fA-F]{2})h', x), 16))
+        }.get(option, str)
 
-    mem_checks = MemCheck.parse(m.group(6))
+        options[option] = parse(value)
+        seen_options.add(option)
 
-    if m.group(7):
-        mfignore = re.match('([0-9a-fA-F]{2})h', m.group(7))
-        flagignore = int(mfignore.group(1), 16)
-    else:
-        flagignore = 0x00
+    mandatory_options = ['name', 'desc', 'base']
+    for option in mandatory_options:
+        if options[option] is None:
+            raise ValueError("missing mandatory option {0}", option)
 
     # state vector cycle positions
-    cycle_pos = [i for i, b in enumerate(cycle.bitvector) if b == 1]
+    cycle_pos = [i for i, b in enumerate(options['cycle'].bitvector) if b == 1]
     cycles = list(range(2**len(cycle_pos)))
 
     if (len(cycles) > MAXTESTS):
@@ -534,20 +603,23 @@ if __name__ == '__main__':
         datamem_bin_out.close()
 
         # begin creating testcase file
-        testcase_out.write('unit.start("{0} ({1})");\n\n'.format(name, desc))
+        testcase_out.write('unit.start("{0} ({1})");\n\n'.format(
+            options['name'], options['desc']))
 
+        iterations = options['repeat'] + 1
         for cycle_no, cycle in enumerate(cycles):
-            for repeat_no in range(repeat + 1):
-                test_no = cycle_no * (repeat + 1) + repeat_no
+            for repeat_no in range(iterations):
+                test_no = cycle_no * iterations + repeat_no
 
                 # display progress
-                fmt = "\rGenerating test {0}/{1}"
-                sys.stdout.write(fmt.format(test_no + 1,
-                                            len(cycles) * (repeat + 1)))
+                progress = "\rGenerating test {0}/{1}".format(
+                    test_no + 1, len(cycles) * (iterations))
+
+                sys.stdout.write(progress)
                 sys.stdout.flush()
 
                 # create state vector variant
-                vect = base.copy()
+                vect = options['base'].copy()
 
                 if cycle > 0:
                     setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
@@ -556,17 +628,23 @@ if __name__ == '__main__':
 
                 vect.randomize()
 
-                if mem_checks:
-                    mem_checks.clear()
+                # potentially skip specific state vectors
+                if options['skip'] and options['skip'].check(vect):
+                    continue
+
+                # reset any memory checks
+                if options['memcheck']:
+                    options['memcheck'].clear()
 
                 # generate test and update files
                 test, progmem = generate_test(
-                    test_no, vect, flagignore, mem_checks)
+                    test_no, vect, options['flagignore'], options['memcheck'])
 
                 testcase_out.writelines(test)
                 progmem_out.writelines(progmem)
 
-        testcase_out.write('unit.finish("{0} ({1})");\n'.format(name, desc))
+        testcase_out.write('unit.finish("{0} ({1})");\n'.format(
+            options['name'], options['desc']))
 
         sys.stdout.write('\n')
 
