@@ -80,6 +80,54 @@ case $1 in
     echo ""
     ;;
 
+"stat")
+    for testdir in "${@:2}"
+    do
+        testname="$(expandbase "$testdir")"
+        echo "Testcase $testname:"
+
+        printf "zex.txt ....... "
+        if [ ! -f "$testdir/zex.txt" ]; then
+           printf "\033[0;31mMISSING\033[0m\n"
+        else
+           printf "\033[0;32mOK\033[0m\n"
+        fi
+
+        printf "testcase.v .... "
+        if [ ! -f "$testdir/testcase.v" ]; then
+           printf "\033[0;31mMISSING\033[0m\n"
+        elif [[ ! $(tac "$testdir/testcase.v") =~ ^unit.finish ]]; then
+           printf "\033[0;31mINCOMPLETE\033[0m\n"
+        else
+           ntests_tc=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/testcase.v" | tail -1)
+           printf "\033[0;32mOK\033[0m ($ntests_tc tests)\n"
+        fi
+
+        printf "progmem.txt ... "
+        if [ ! -f "$testdir/progmem.txt" ]; then
+           printf "\033[0;31mMISSING\033[0m\n"
+        else
+           ntests_pmem=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/progmem.txt" | tail -1)
+           printf "\033[0;32mOK\033[0m ($ntests_pmem tests)\n"
+        fi
+
+        printf "datamem.txt ... "
+        if [ ! -f "$testdir/datamem.txt" ]; then
+           printf "\033[0;31mMISSING\033[0m\n"
+        else
+           printf "\033[0;32mOK\033[0m\n"
+        fi
+
+        if [ ! -z "$ntests_tc" ]; then
+            if [ ! -z "$ntests_pmem" ] && [ "$ntests_tc" -ne "$ntests_pmem" ]; then
+                printf "==> \033[0;31mTEST NUMBER MISMATCH, NEEDS UPDATE\033[0m\n"
+            else
+                printf "==> $ntests_tc tests\n"
+            fi
+        fi
+    done
+    ;;
+
 *)
     echo "Unknown option '$1'" 1>&2
     usage
