@@ -36,6 +36,14 @@ expandbase()
     echo "$(basename "$abspath")"
 }
 
+for testdir in "${@:2}"
+do
+    if [ ! -d "$testdir" ]; then
+        echo "Not a directory: '$testdir'" 1>&2
+        usage
+    fi
+done
+
 case $1 in
 "generate")
     for testdir in "${@:2}"
@@ -48,14 +56,6 @@ case $1 in
     ;;
 
 "run")
-    for testdir in "${@:2}"
-    do
-        if [ ! -d "$testdir" ]; then
-            echo "Not a directory: '$testdir'" 1>&2
-            usage
-        fi
-    done
-
     for testdir in "${@:2}"
     do
         testname="$(expandbase "$testdir")"
