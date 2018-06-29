@@ -14,14 +14,17 @@ RUNSIM = 'ictest_runsim'
 
 # limits
 MAXTESTS = 2048
-PROGMEM_SIZE = 8192
-DATAMEM_SIZE = 8192
+PROGMEM_SIZE = 4096
+INT_DATAMEM_SIZE = 2**9
+DATAMEM_SIZE = 2**13
 
 # output files
 ZEX_FILE = 'zex.txt'
 TESTCASE_FILE = 'testcase.v'
 PROGMEM_FILE = 'progmem.txt'
-DATAMEM_FILE = 'datamem.txt'
+INT_DATAMEM1_FILE = 'datamem_int1.txt'
+INT_DATAMEM2_FILE = 'datamem_int2.txt'
+EXT_DATAMEM_FILE = 'datamem_ext.txt'
 
 # temporary files
 ASM_FILE = 'progmem.asm'
@@ -47,6 +50,8 @@ STATE_WIDTHS = {
     "IX"    : 16,
     "IY"    : 16,
     "SP"    : 16,
+    "I"     : 8,
+    "IFF"   : 1,
     "DUMMY" : 8
 }
 
@@ -173,12 +178,21 @@ class SkipVector:
 
 class MemCheck:
     MNEMONICS = {
-        "(BC)" : ["id", "BC"],
-        "(DE)" : ["id", "DE"],
-        "(HL)" : ["id", "HL"],
-        "(SP)" : ["id", "SP"],
-        "(IX + INST3)" : ["+", "IX", "INST3"],
-        "(IY + INST3)" : ["+", "IY", "INST3"]
+        "(BC)"              : ["id", "BC"],
+        "(DE)"              : ["id", "DE"],
+        "(HL)"              : ["id", "HL"],
+        "(SP)"              : ["id", "SP"],
+        "(SP+1)"            : ["+", "SP", 1],
+        "(SP-1)"            : ["+", "SP", -1],
+        "(SP-2)"            : ["+", "SP", -2],
+        "(CALL_PCH"         : ["+", "SP", -1],
+        "CALL_PCL)"         : ["+", "SP", -2],
+        "(IX+INST3)"        : ["+", "IX", "INST3"],
+        "(IY+INST3)"        : ["+", "IY", "INST3"],
+        "(INST3:INST2)"     : [":", "INST3", "INST2"],
+        "([INST3:INST2]+1)" : [":+1", "INST3", "INST2"],
+        "(INST4:INST3)"     : [":", "INST4", "INST3"],
+        "([INST4:INST3]+1)" : [":+1", "INST4", "INST3"]
     }
 
     def __init__(self, states, pre, addrs=None, expected=None):
@@ -203,6 +217,31 @@ class MemCheck:
 
         return MemCheck(states, pre)
 
+    def gen_addrs(self):
+        for state in self.states:
+            components = MemCheck.MNEMONICS[state]
+            operator, operands = components[0], components[1:]
+
+            operands = [self.pre[op] if isinstance(op, str) else op
+                        for op in operands]
+
+            if operator == 'id':
+                addr = operands[0]
+            elif operator == '+':
+                disp = operands[1]
+                if (disp & 0x80) == 0x80:
+                    disp = -(((0xFF00 | disp) ^ 0xFFFF) + 1)
+                addr = (operands[0] + disp) % (2**16)
+            elif operator == ':':
+                addr = 2**8 * operands[0] + operands[1]
+            elif operator == ':+1':
+                addr = 2**8 * operands[0] + operands[1] + 1
+            else:
+                err = "unrecognized memcheck operator: {0}"
+                raise ValueError(err.format(operator))
+
+            self.addrs.append(addr)
+
     def clear(self):
         for key in self.pre:
             self.pre[key] = None
@@ -213,65 +252,88 @@ class MemCheck:
 
 def generate_test(test_no, state_vector, options):
     ASM_STATE_FMT = {
-        "A"    : " LD A,{0:03X}H\n",
-        "A'"   : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
-        "BC"   : " LD BC,{0:05X}H\n",
-        "B'C'" : " EXX\n LD BC,{0:05X}H\n EXX\n",
-        "DE"   : " LD DE,{0:05X}H\n",
-        "D'E'" : " EXX\n LD DE,{0:05X}H\n EXX\n",
-        "HL"   : " LD HL,{0:05X}H\n",
-        "H'L'" : " EXX\n LD HL,{0:05X}H\n EXX\n",
-        "IX"   : " LD IX,{0:05X}H\n",
-        "IY"   : " LD IY,{0:05X}H\n",
-        "SP"   : " LD SP,{0:05X}H\n"
+        "A"      : " LD A,{0:03X}H\n",
+        "A'"     : " EX AF,AF'\n LD A,{0:03X}H\n EX AF,AF'\n",
+        "BC"     : " LD BC,{0:05X}H\n",
+        "B'C'"   : " EXX\n LD BC,{0:05X}H\n EXX\n",
+        "DE"     : " LD DE,{0:05X}H\n",
+        "D'E'"   : " EXX\n LD DE,{0:05X}H\n EXX\n",
+        "HL"     : " LD HL,{0:05X}H\n",
+        "H'L'"   : " EXX\n LD HL,{0:05X}H\n EXX\n",
+        "IX"     : " LD IX,{0:05X}H\n",
+        "IY"     : " LD IY,{0:05X}H\n",
+        "SP"     : " LD SP,{0:05X}H\n",
+        "IFF_DI" : " DI\n",
+        "IFF_EN" : " EI\n"
     }
 
     VUNIT_ELEMS = {
-        "A"    : "z80_i.cpu_i.datapath_i.regfile_i.a",
-        "A'"   : "z80_i.cpu_i.datapath_i.regfile_i.a_p",
-        "F"    : "z80_i.cpu_i.datapath_i.regfile_i.f",
-        "F'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p",
-        "S"    : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_S]",
-        "S'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_S]",
-        "Z"    : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_Z]",
-        "Z'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_Z]",
-        "H"    : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_H]",
-        "H'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_H]",
-        "PV"   : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_PV]",
-        "PV'"  : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_PV]",
-        "N"    : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_N]",
-        "N'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_N]",
-        "C"    : "z80_i.cpu_i.datapath_i.regfile_i.f[ALU_FLAG_C]",
-        "C'"   : "z80_i.cpu_i.datapath_i.regfile_i.f_p[ALU_FLAG_C]",
-        "BC"   : "z80_i.cpu_i.datapath_i.regfile_i.bc",
-        "B'C'" : "z80_i.cpu_i.datapath_i.regfile_i.bc_p",
-        "DE"   : "z80_i.cpu_i.datapath_i.regfile_i.de",
-        "D'E'" : "z80_i.cpu_i.datapath_i.regfile_i.de_p",
-        "HL"   : "z80_i.cpu_i.datapath_i.regfile_i.hl",
-        "H'L'" : "z80_i.cpu_i.datapath_i.regfile_i.hl_p",
-        "IX"   : "z80_i.cpu_i.datapath_i.regfile_i.ix",
-        "IY"   : "z80_i.cpu_i.datapath_i.regfile_i.iy",
-        "SP"   : "z80_i.cpu_i.datapath_i.regfile_i.sp",
-        "PC"   : "z80_i.cpu_i.datapath_i.reg_pc_i.q",
-        "DMEM" : "z80_i.memory_control_i.datamem_mock_i.datamem",
-        "SWP"  : "z80_i.memory_control_i.datamem_mock_i.datamem_swp"
+        "A"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.a",
+        "A'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.ap",
+        "F"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f",
+        "F'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp",
+        "S"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[7]",
+        "S'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp7[]",
+        "Z"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[6]",
+        "Z'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp[6]",
+        "H"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[4]",
+        "H'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp[4]",
+        "PV"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[2]",
+        "PV'"  : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp[2]",
+        "N"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[1]",
+        "N'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp[1]",
+        "C"    : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.f[0]",
+        "C'"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.fp[0]",
+        "BC"   : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.b,"
+                 " top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.c }",
+        "B'C'" : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.bp,"
+                 " top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.cp }",
+        "DE"   : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.d, "
+                 " top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.e }",
+        "D'E'" : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.dp, "
+                 " top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.ep }",
+        "HL"   : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.h,"
+                 " top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.l }",
+        "H'L'" : "{ top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.hp,"
+                 "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.lp }",
+        "IX"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.ix",
+        "IY"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.iy",
+        "SP"   : "top_z80_i.z80_i.cpu_i.datapath_i.regfile_i.sp",
+        "PC"   : "top_z80_i.z80_i.cpu_i.datapath_i.reg_pc_i.q",
+        "I"    : "top_z80_i.z80_i.cpu_i.datapath_i.reg_int_ctrl_i.q",
+        "IFF"  : "{ top_z80_i.z80_i.cpu_i.controller_i.fsm_i.int_iff1,"
+                   " top_z80_i.z80_i.cpu_i.controller_i.fsm_i.int_iff2 }",
+        "INT_DMEM1" : "top_z80_i.z80_i.memory_control_i."
+                      "idram_i.SY180_256X8X1CM8_i1.Memory",
+		"INT_DMEM2" : "top_z80_i.z80_i.memory_control_i."
+                      "idram_i.SY180_256X8X1CM8_i2.Memory",
+		"EXT_DMEM"  : "datamem_ext_i.datamem",
+        "SWP"       : "datamem_swap"
     }
 
     VUNIT_STATE_FMT = {
-        "A"    : "{0} = 8'h{1:02X};\n",
-        "A'"   : "{0} = 8'h{1:02X};\n",
-        "F"    : "{0} = 8'h{1:02X};\n",
-        "F'"   : "{0} = 8'h{1:02X};\n",
-        "BC"   : "{0} = 16'h{1:04X};\n",
-        "B'C'" : "{0} = 16'h{1:04X};\n",
-        "DE"   : "{0} = 16'h{1:04X};\n",
-        "D'E'" : "{0} = 16'h{1:04X};\n",
-        "HL"   : "{0} = 16'h{1:04X};\n",
-        "H'L'" : "{0} = 16'h{1:04X};\n",
-        "IX"   : "{0} = 16'h{1:04X};\n",
-        "IY"   : "{0} = 16'h{1:04X};\n",
-        "PC"   : "{0} = 16'h{1:04X};\n",
-        "SP"   : "{0} = 16'h{1:04X};\n"
+        "A"     : "{0} = 8'h{1:02X};\n",
+        "A'"    : "{0} = 8'h{1:02X};\n",
+        "F"     : "{0} = 8'h{1:02X};\n",
+        "F'"    : "{0} = 8'h{1:02X};\n",
+        "BC"    : "{0} = 16'h{1:04X};\n",
+        "B'C'"  : "{0} = 16'h{1:04X};\n",
+        "DE"    : "{0} = 16'h{1:04X};\n",
+        "D'E'"  : "{0} = 16'h{1:04X};\n",
+        "HL"    : "{0} = 16'h{1:04X};\n",
+        "H'L'"  : "{0} = 16'h{1:04X};\n",
+        "IX"    : "{0} = 16'h{1:04X};\n",
+        "IY"    : "{0} = 16'h{1:04X};\n",
+        "PC"    : "{0} = 16'h{1:04X};\n",
+        "SP"    : "{0} = 16'h{1:04X};\n",
+        "I"     : "{0} = 8'h{1:02X};\n",
+        "IFF"   : "{0} = 2'b{1:02b};\n",
+        "INT_SWP" : "{{0}}[{0}'h{{1:02X}}] =\n"
+                    "{{2}}[16'h{{3:02X}}];\n".format(
+                        int(math.log(INT_DATAMEM_SIZE / 2, 2))),
+        "EXT_SWP" : "{{0}}[{0}'h{{1:02X}}] =\n"
+                    "{{2}}[16'h{{3:02X}}];\n".format(
+                        int(math.log(DATAMEM_SIZE, 2)))
     }
 
     VUNIT_EXPECT_FMT = {
@@ -297,11 +359,16 @@ def generate_test(test_no, state_vector, options):
         "H'L'" : "unit.assert_eq16(16'h{0:04X}, {1},\n\"H'L' ({2})\");\n",
         "IX"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IX ({2})\");\n",
         "IY"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"IY ({2})\");\n",
+        "I"    : "unit.assert_eq8(8'h{0:02X}, {1},\n\"I ({2})\");\n",
+        "IFF"  : "unit.assert_eq2(2'b{0:02b}, {1},\n\"IFF ({2})\");\n",
         "SP"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"SP ({2})\");\n",
         "PC"   : "unit.assert_eq16(16'h{0:04X}, {1},\n\"PC ({2})\");\n",
-        "DMEM" : "unit.assert_eq8(8'h{0:02X}, {1}[13'h{2:04X}],\n"
-                 "\"DMEM ({3})\");\n",
-        "SWP"  : "{0}[16'h{1:04X}] =\n{2}[16'h{3:04X}];\n",
+        "INT_DMEM" : "unit.assert_eq8(8'h{{0:02X}}, {{1}}[{0}'h{{2:02X}}],\n"
+                     "\"INT DMEM ({{3}})\");\n".format(
+                         int(math.log(INT_DATAMEM_SIZE / 2, 2))),
+        "EXT_DMEM" : "unit.assert_eq8(8'h{{0:02X}}, {{1}}[{0}'h{{2:02X}}],\n"
+                     "\"EXT DMEM ({{3}})\");\n".format(
+                         int(math.log(DATAMEM_SIZE, 2)))
     }
 
     VUNIT_FLAG_ORDER = ['S', 'Z', 'H', 'PV', 'N', 'C']
@@ -316,6 +383,7 @@ def generate_test(test_no, state_vector, options):
     init_asm = ['START:\n']
     init_flags = '0x00'
     init_flags_p = '0x00'
+    init_int_ctrl = '0x00'
 
     test_ops = []
 
@@ -344,6 +412,17 @@ def generate_test(test_no, state_vector, options):
                 init_flags = '{0:02X}'.format(binvalue)
             elif state == "F'":
                 init_flags_p = '{0:02X}'.format(binvalue)
+            elif state == 'I':
+                init_int_ctrl = '{0:02X}'.format(binvalue)
+            elif state == 'IFF':
+                if binvalue not in [0, 1]:
+                    err = "unsupported IFF value: {0}".format(iff)
+                    raise ValueError(err)
+
+                if binvalue == 0:
+                    init_asm.append(ASM_STATE_FMT['IFF_DI'])
+                elif binvalue == 1:
+                    init_asm.append(ASM_STATE_FMT['IFF_EN'])
             else:
                 init_asm.append(ASM_STATE_FMT[state].format(binvalue))
 
@@ -387,24 +466,12 @@ def generate_test(test_no, state_vector, options):
             '{0:04X}'.format(DATAMEM_SIZE),
             init_flags,
             init_flags_p,
+            init_int_ctrl,
             '{0:04X}'.format(brk)
         ]
 
         if memcheck:
-            for state in memcheck.states:
-                components = MemCheck.MNEMONICS[state]
-                operator, operands = components[0], components[1:]
-
-                if operator == 'id':
-                    addr = memcheck.pre[operands[0]]
-                elif operator == '+':
-                    addr = sum([memcheck.pre[op] for op in operands])
-                else:
-                    err = "unrecognized memcheck operator: {0}"
-                    raise ValueError(err.format(operator))
-
-                memcheck.addrs.append(addr)
-
+            memcheck.gen_addrs()
             args += ['{0:04x}'.format(a) for a in memcheck.addrs]
 
         z80sim = subprocess.Popen(args, stdout=subprocess.PIPE)
@@ -470,19 +537,25 @@ def generate_test(test_no, state_vector, options):
         elif r == 'PC' and pccheck != 'none':
             pc_expected = int(v, 16)
 
-            if pc_expected == DATAMEM_SIZE + len(test_ops):
+            # no jump occured (in all likelihood)
+            if pc_expected == DATAMEM_SIZE + len(instructions) - 3:
                 pc_expected = current_pc + len(test_ops)
+            # correct expected PC in case of a relative jump
             elif pccheck == 'rel':
-                pc_expected = (pc_expected - DATAMEM_SIZE + current_pc) % (2**16)
-
-            current_pc += len(test_ops)
+                pc_expected = (pc_expected - DATAMEM_SIZE - \
+                               ((len(instructions) - 3) - len(test_ops)) + \
+                               current_pc) % (2**16)
 
         elif r in state_vector.states:
             reg_expected[r] = int(v, 16)
 
     # optain expected memory locations
     if memcheck:
-        for addr in memcheck.addrs:
+        pc_call = DATAMEM_SIZE + len(instructions) - 3
+        pc_call_rel_hi = None
+        pc_call_rel_lo = None
+
+        for state, addr in zip(memcheck.states, memcheck.addrs):
             addr_hex = '{0:04X}'.format(addr)
             addr_lsn = int(addr_hex[3], 16)
 
@@ -490,19 +563,43 @@ def generate_test(test_no, state_vector, options):
             m = re.search(r'Adr.*\n[0-9a-f]{4} - (.*)\t', simout)
 
             mem_row = [int(val, 16) for val in m.group(1).split()]
-            memcheck.expected.append(mem_row[addr_lsn])
+            mem_val = mem_row[addr_lsn]
+
+            if state == '(CALL_PCH' and mem_val == (pc_call >> 8) & 0xFF:
+                pc_call_rel_hi = ((current_pc + len(test_ops)) >> 8) & 0xFF
+
+            elif state == 'CALL_PCL)' and mem_val == pc_call & 0xFF:
+                pc_call_rel_lo = (current_pc + len(test_ops)) & 0xFF
+
+            memcheck.expected.append(mem_val)
+
+        if pc_call_rel_hi is not None and pc_call_rel_lo is not None:
+             i_pc_hi = memcheck.states.index('(CALL_PCH')
+             i_pc_lo = memcheck.states.index('CALL_PCL)')
+
+             memcheck.expected[i_pc_hi] = pc_call_rel_hi
+             memcheck.expected[i_pc_lo] = pc_call_rel_lo
+
+    current_pc += len(test_ops)
 
     # add timeout loop to testbench code
+    msg = "Testcase #{0}".format(test_no)
     waitloop = [
         "#(CLKPERIOD);",
         "",
+        "loop_condition = 1'b1;",
         "loop_counter = 5'b0;",
-        "while (z80_i.cpu_i.controller_i.fsm_i.state != FSM_STATE_INSTR_FETCH1_1)",
-        "begin",
-        "    #(CLKPERIOD);",
-        "    loop_counter = loop_counter + 1;",
-        "    if (loop_counter == 5'b11111)",
-        "        unit.fail(\"Instruction not terminating\");",
+        "while (loop_condition) begin",
+        "    #(3 * CLKPERIOD / 4);",
+        "    if (top_z80_i.z80_i.cpu_i.controller_i.fsm_i.state ==",
+        "        FSM_STATE_INSTR_FETCH1_1) begin",
+        "        loop_condition = 1'b0;",
+        "    end else begin",
+        "        #(CLKPERIOD / 4);",
+        "        loop_counter = loop_counter + 1;",
+        "        if (loop_counter == 5'b11111)",
+        "            unit.fail(\"Instruction not terminating ({0})\");".format(msg),
+        "    end",
         "end"
     ]
 
@@ -534,16 +631,37 @@ def generate_test(test_no, state_vector, options):
         test.append('\n')
 
         for addr, exp in zip(memcheck.addrs, memcheck.expected):
-            fmt = VUNIT_EXPECT_FMT['DMEM']
             msg = "Testcase #{0} {1}".format(test_no, uuid.uuid4())
-            expect = fmt.format(exp, VUNIT_ELEMS['DMEM'], addr, msg)
+
+            if addr < INT_DATAMEM_SIZE / 2:
+                fmt = VUNIT_EXPECT_FMT['INT_DMEM']
+                expect = fmt.format(exp, VUNIT_ELEMS['INT_DMEM1'], addr, msg)
+            elif addr < INT_DATAMEM_SIZE:
+                addr -= INT_DATAMEM_SIZE / 2
+                fmt = VUNIT_EXPECT_FMT['INT_DMEM']
+                expect = fmt.format(exp, VUNIT_ELEMS['INT_DMEM2'], addr, msg)
+            elif addr < DATAMEM_SIZE:
+                fmt = VUNIT_EXPECT_FMT['EXT_DMEM']
+                expect = fmt.format(exp, VUNIT_ELEMS['EXT_DMEM'], addr, msg)
+            else:
+                return None
 
             test.append(expect)
 
         for addr in memcheck.addrs:
-            fmt = VUNIT_EXPECT_FMT['SWP']
-            swp = fmt.format(VUNIT_ELEMS['DMEM'], addr,
-                             VUNIT_ELEMS['SWP'], addr)
+            if addr < INT_DATAMEM_SIZE / 2:
+                fmt = VUNIT_STATE_FMT['INT_SWP']
+                swp = fmt.format(VUNIT_ELEMS['INT_DMEM1'], addr,
+                                 VUNIT_ELEMS['SWP'], addr)
+            elif addr < INT_DATAMEM_SIZE:
+                fmt = VUNIT_STATE_FMT['INT_SWP']
+                addr2 = addr - INT_DATAMEM_SIZE / 2
+                swp = fmt.format(VUNIT_ELEMS['INT_DMEM2'], addr2,
+                                 VUNIT_ELEMS['SWP'], addr)
+            else:
+                fmt = VUNIT_STATE_FMT['EXT_SWP']
+                swp = fmt.format(VUNIT_ELEMS['EXT_DMEM'], addr,
+                                 VUNIT_ELEMS['SWP'], addr)
 
             test.append(swp)
 
@@ -558,7 +676,7 @@ def generate_test(test_no, state_vector, options):
         fmt = VUNIT_STATE_FMT['PC']
         test.append(fmt.format(VUNIT_ELEMS['PC'], current_pc))
 
-    test.append('\n')
+    test.append("\n#(CLKPERIOD / 4);\n\n");
 
     return test, progmem
 
@@ -588,6 +706,10 @@ if __name__ == '__main__':
 
     seen_options = set()
     for i, line in enumerate(zex.split('\n')):
+        if i == 0 and line == 'MANUAL':
+            print("MANUAL specified, skipping automatic test generation")
+            exit()
+
         m = re.match('^(\w+):\s*(.*)$', line)
         if not m:
             raise ValueError("syntax error in line {0} of zex file".format(i))
@@ -640,24 +762,39 @@ if __name__ == '__main__':
     # generate testcase files
     testcase_out = open(TESTCASE_FILE, 'w+')
     progmem_out = open(PROGMEM_FILE, 'w+')
-    datamem_out = open(DATAMEM_FILE, 'w+')
+    int_datamem1_out = open(INT_DATAMEM1_FILE, 'w+')
+    int_datamem2_out = open(INT_DATAMEM2_FILE, 'w+')
+    ext_datamem_out = open(EXT_DATAMEM_FILE, 'w+')
     datamem_bin_out = open(DATAMEM_BIN_FILE, 'w+')
 
     # create random data memory
-    datamem = []
+    int_datamem1 = []
+    int_datamem2 = []
+    ext_datamem = []
     datamem_bin = [255, 0, 0]
     for addr in range(DATAMEM_SIZE):
         rand_val = random.randint(0, 255)
 
-        datamem.append('@{0:04X} {1:02X}\n'.format(addr, rand_val))
+        if addr < INT_DATAMEM_SIZE / 2:
+            int_datamem1.append('@{0:04X} {1:02X}\n'.format(addr, rand_val))
+        elif addr < INT_DATAMEM_SIZE:
+            addr -= INT_DATAMEM_SIZE / 2
+            int_datamem2.append('@{0:04X} {1:02X}\n'.format(addr, rand_val))
+        elif addr < DATAMEM_SIZE:
+            ext_datamem.append('@{0:04X} {1:02X}\n'.format(addr, rand_val))
+
         datamem_bin.append(rand_val)
 
     datamem_bin = bytes(bytearray(datamem_bin))
 
     try:
         # fill data memory
-        datamem_out.writelines(datamem)
-        datamem_out.close()
+        int_datamem1_out.writelines(int_datamem1)
+        int_datamem1_out.close()
+        int_datamem2_out.writelines(int_datamem2)
+        int_datamem2_out.close()
+        ext_datamem_out.writelines(ext_datamem)
+        ext_datamem_out.close()
 
         datamem_bin_out.write(datamem_bin)
         datamem_bin_out.close()
@@ -682,29 +819,38 @@ if __name__ == '__main__':
                 sys.stdout.flush()
 
                 # create state vector variant
-                vect = options['base'].copy()
+                done = False
+                skip = False
+                while not done:
+                    vect = options['base'].copy()
 
-                setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
-                for i, b in enumerate(setbits):
-                    vect.bitvector[cycle_pos[i]] = int(b)
+                    if len(cycle_pos) > 0:
+                        setbits = '{0:b}'.format(cycle).zfill(len(cycle_pos))
+                        for i, b in enumerate(setbits):
+                            vect.bitvector[cycle_pos[i]] = int(b)
 
-                vect.randomize()
+                    vect.randomize()
 
-                # potentially skip specific state vectors
-                if options['skip'] and options['skip'].check(vect):
-                    continue
+                    # potentially skip specific state vectors
+                    if options['skip'] and options['skip'].check(vect):
+                        skip = True
+                        break
 
-                # reset any memory checks
-                if options['memcheck']:
-                    options['memcheck'].clear()
+                    # reset any memory checks
+                    if options['memcheck']:
+                        options['memcheck'].clear()
 
-                # generate test and update files
-                test, progmem = generate_test(test_no, vect, options)
+                    # generate test and update files
+                    result = generate_test(test_no, vect, options)
 
-                testcase_out.writelines(test)
-                progmem_out.writelines(progmem)
+                    if result is not None:
+                    	test, progmem = result
+                        done = True
 
-                test_no += 1
+                if not skip:
+                    testcase_out.writelines(test)
+                    progmem_out.writelines(progmem)
+                    test_no += 1
 
         testcase_out.write('unit.finish("{0} ({1})");\n'.format(
             options['name'], options['desc']))
@@ -714,7 +860,9 @@ if __name__ == '__main__':
     finally:
         testcase_out.close()
         progmem_out.close()
-        datamem_out.close()
+        int_datamem1_out.close()
+        int_datamem2_out.close()
+        ext_datamem_out.close()
         datamem_bin_out.close()
 
         os.remove(DATAMEM_BIN_FILE)

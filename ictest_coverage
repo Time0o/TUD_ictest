@@ -1,0 +1,42 @@
+#!/bin/csh
+
+module load cds_ius
+
+set iccr_tmp = "`mktemp`"
+set iccr_log = "iccr.log"
+set merge_tmp = "`mktemp -d`"
+
+foreach test ($argv)
+    if (! -d "$test") then
+       echo "Not a directory: '$test'"
+       continue
+    endif
+
+    echo "Adding: '$test'"
+    echo "cd $test; load_test *; cd .." >> "$iccr_tmp"
+end
+
+mkdir "$merge_tmp/design"
+mkdir "$merge_tmp/scope"
+
+echo "cd $merge_tmp"           >> "$iccr_tmp"
+echo "set_working_directory ." >> "$iccr_tmp"
+echo "union all"               >> "$iccr_tmp"
+echo "reset coverage"          >> "$iccr_tmp"
+echo "load_test *"             >> "$iccr_tmp"
+echo "view_graphic"            >> "$iccr_tmp"
+
+iccr "$iccr_tmp" >& "$iccr_log"
+set ret = $?
+echo "$ret"
+
+rm -f "iccr.key"
+rm -f "$iccr_tmp"
+rm -rf "$merge_tmp"
+
+if ($ret != 0) then
+  echo "iccr command invokation failed, check logfile"
+  exit 1
+endif
+
+rm -f "$iccr_log"

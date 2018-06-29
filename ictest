@@ -1,13 +1,15 @@
 #!/bin/bash
 
-usage_msg="Usage: ictest [generate|run] TESTDIRS"
+usage_msg="Usage: ictest [generate|run|coverage|stat] TESTS"
 
 showhelp() {
 cat << EOF
 $usage_msg
 
-generate TESTDIRS : generate testcases from zex.txt files for given directories
-run TESTDIRS : run generated tests in given directories and report results
+generate TESTS  : Generate tests from zex.txt files.
+run [syn] TESTS : Run tests and report results.
+coverage TESTS  : Report combined test coverage.
+stat TESTS      : Print short test sanity checks.
 EOF
 
    exit 0
@@ -22,6 +24,32 @@ warn() {
     echo "WARNING: $1" 1>&2
 }
 
+checktests() {
+    for testdir in "$1"
+    do
+        if [ ! -d "$testdir" ]; then
+            echo "Not a directory: '$testdir'" 1>&2
+            usage
+        fi
+    done
+}
+
+expandbase()
+{
+    abspath="$(readlink -f "$1")"
+    echo "$(basename "$abspath")"
+}
+
+assert_file() {
+    dots='......................... '
+    printf "%s %s" $2 "${dots:${#2}}"
+    if [ ! -f "$1/$2" ]; then
+       printf "\033[0;31mMISSING\033[0m\n"
+    else
+       printf "\033[0;32mOK\033[0m\n"
+    fi
+}
+
 if [ "$#" -le 1 ]; then
     if [ "$1" = "--help" ]; then
         showhelp
@@ -30,23 +58,13 @@ if [ "$#" -le 1 ]; then
     fi
 fi
 
-expandbase()
-{
-    abspath="$(readlink -f "$1")"
-    echo "$(basename "$abspath")"
-}
-
-for testdir in "${@:2}"
-do
-    if [ ! -d "$testdir" ]; then
-        echo "Not a directory: '$testdir'" 1>&2
-        usage
-    fi
-done
-
 case $1 in
 "generate")
-    for testdir in "${@:2}"
+    targets="${@:2}"
+
+    checktests $targets
+
+    for testdir in $targets
     do
         testname="$(expandbase "$testdir")"
 
@@ -56,7 +74,22 @@ case $1 in
     ;;
 
 "run")
-    for testdir in "${@:2}"
+    runtype=1
+    targets="${@:2}"
+
+    if [ "$#" -ge 2 ]; then
+        if [ "$2" = "syn" ]; then
+            runtype=2
+            targets="${@:3}"
+        elif [ "$2" = "lay" ]; then
+            runtype=3
+            targets="${@:3}"
+        fi
+    fi
+
+    checktests $targets
+
+    for testdir in $targets
     do
         testname="$(expandbase "$testdir")"
 
@@ -67,10 +100,10 @@ case $1 in
         fi
 
         echo "Generating makefile"
-        (cd "$testdir"; icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR)
+        (cd "$testdir"; echo "$runtype" | icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR)
         if [ $? -eq 0 ]; then
             warn "Makefile generation failed, check logfile"
-           continue
+            continue
         fi
 
         echo "Running simulation"
@@ -80,49 +113,52 @@ case $1 in
     echo ""
     ;;
 
+"coverage")
+    targets="${@:2}"
+
+    checktests $targets
+
+    ictest_coverage $targets
+    ;;
+
 "stat")
-    for testdir in "${@:2}"
+    targets="${@:2}"
+
+    checktests $targets
+
+    for testdir in $targets
     do
         testname="$(expandbase "$testdir")"
         echo "Testcase $testname:"
 
-        printf "zex.txt ....... "
-        if [ ! -f "$testdir/zex.txt" ]; then
-           printf "\033[0;31mMISSING\033[0m\n"
-        else
-           printf "\033[0;32mOK\033[0m\n"
-        fi
+        assert_file $testdir "zex.txt"
 
-        printf "testcase.v .... "
+        printf "testcase.v ............... "
         if [ ! -f "$testdir/testcase.v" ]; then
            printf "\033[0;31mMISSING\033[0m\n"
         elif [[ ! $(tac "$testdir/testcase.v") =~ ^unit.finish ]]; then
            printf "\033[0;31mINCOMPLETE\033[0m\n"
         else
            ntests_tc=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/testcase.v" | tail -1)
-           printf "\033[0;32mOK\033[0m ($ntests_tc tests)\n"
+           printf "\033[0;32mOK\033[0m ($((ntests_tc+1)) tests)\n"
         fi
 
-        printf "progmem.txt ... "
+        printf "progmem.txt .............. "
         if [ ! -f "$testdir/progmem.txt" ]; then
            printf "\033[0;31mMISSING\033[0m\n"
         else
            ntests_pmem=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/progmem.txt" | tail -1)
-           printf "\033[0;32mOK\033[0m ($ntests_pmem tests)\n"
+           printf "\033[0;32mOK\033[0m ($((ntests_pmem+1)) tests)\n"
         fi
 
-        printf "datamem.txt ... "
-        if [ ! -f "$testdir/datamem.txt" ]; then
-           printf "\033[0;31mMISSING\033[0m\n"
-        else
-           printf "\033[0;32mOK\033[0m\n"
-        fi
+        assert_file $testdir "datamem_int1.txt"
+        assert_file $testdir "datamem_int2.txt"
+        assert_file $testdir "datamem_ext.txt"
+        assert_file $testdir "iomem.txt"
 
         if [ ! -z "$ntests_tc" ]; then
             if [ ! -z "$ntests_pmem" ] && [ "$ntests_tc" -ne "$ntests_pmem" ]; then
                 printf "==> \033[0;31mTEST NUMBER MISMATCH, NEEDS UPDATE\033[0m\n"
-            else
-                printf "==> $ntests_tc tests\n"
             fi
         fi
     done
