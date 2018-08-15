@@ -305,9 +305,9 @@ def generate_test(test_no, state_vector, options):
                    " top_z80_i.z80_i.cpu_i.controller_i.fsm_i.int_iff2 }",
         "INT_DMEM1" : "top_z80_i.z80_i.memory_control_i."
                       "idram_i.SY180_256X8X1CM8_i1.Memory",
-		"INT_DMEM2" : "top_z80_i.z80_i.memory_control_i."
+        "INT_DMEM2" : "top_z80_i.z80_i.memory_control_i."
                       "idram_i.SY180_256X8X1CM8_i2.Memory",
-		"EXT_DMEM"  : "datamem_ext_i.datamem",
+        "EXT_DMEM"  : "datamem_ext_i.datamem",
         "SWP"       : "datamem_swap"
     }
 
@@ -844,7 +844,7 @@ if __name__ == '__main__':
                     result = generate_test(test_no, vect, options)
 
                     if result is not None:
-                    	test, progmem = result
+                        test, progmem = result
                         done = True
 
                 if not skip:
