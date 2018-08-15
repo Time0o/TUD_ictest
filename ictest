@@ -6,10 +6,10 @@ showhelp() {
 cat << EOF
 $usage_msg
 
-generate TESTS  : Generate tests from zex.txt files.
-run [syn] TESTS : Run tests and report results.
-coverage TESTS  : Report combined test coverage.
-stat TESTS      : Print short test sanity checks.
+generate TESTS      : Generate tests from zex.txt files.
+run [syn|lay] TESTS : Run tests and report results.
+coverage TESTS      : Report combined test coverage.
+stat TESTS          : Print short test sanity checks.
 EOF
 
    exit 0
@@ -100,7 +100,9 @@ case $1 in
         fi
 
         echo "Generating makefile"
-        (cd "$testdir"; echo "$runtype" | icncsim makefile 2>&1 > /dev/null | tee /dev/tty | grep -q ERROR)
+        (cd "$testdir"; echo "$runtype" | icncsim makefile 2>&1 > /dev/null | \
+         tee /dev/tty | grep -q ERROR)
+
         if [ $? -eq 0 ]; then
             warn "Makefile generation failed, check logfile"
             continue
@@ -139,7 +141,8 @@ case $1 in
         elif [[ ! $(tac "$testdir/testcase.v") =~ ^unit.finish ]]; then
            printf "\033[0;31mINCOMPLETE\033[0m\n"
         else
-           ntests_tc=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/testcase.v" | tail -1)
+           ntests_tc=$(grep -Po "// BEGIN TESTCASE #\K\d+" \
+                       "$testdir/testcase.v" | tail -1)
            printf "\033[0;32mOK\033[0m ($((ntests_tc+1)) tests)\n"
         fi
 
@@ -147,7 +150,8 @@ case $1 in
         if [ ! -f "$testdir/progmem.txt" ]; then
            printf "\033[0;31mMISSING\033[0m\n"
         else
-           ntests_pmem=$(grep -Po "// BEGIN TESTCASE #\K\d+" "$testdir/progmem.txt" | tail -1)
+           ntests_pmem=$(grep -Po "// BEGIN TESTCASE #\K\d+" \
+                         "$testdir/progmem.txt" | tail -1)
            printf "\033[0;32mOK\033[0m ($((ntests_pmem+1)) tests)\n"
         fi
 
